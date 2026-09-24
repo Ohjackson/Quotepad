@@ -5,7 +5,7 @@ import Foundation
 /// A crash at any point leaves either the previous or the new file intact, never a partial one.
 final class DurableStore {
     let url: URL
-    private let queue = DispatchQueue(label: "QuickMemo.DurableStore")
+    private let queue = DispatchQueue(label: "Quotepad.DurableStore")
     private var lastWritten: Data? // only touched on `queue`
 
     init(url: URL) {
@@ -31,7 +31,7 @@ final class DurableStore {
                 try writeDurably(data)
                 lastWritten = data
             } catch {
-                NSLog("QuickMemo: save failed: \(error)")
+                NSLog("Quotepad: save failed: \(error)")
             }
         }
     }

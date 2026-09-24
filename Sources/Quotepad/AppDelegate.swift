@@ -13,17 +13,38 @@ struct TabsState: Codable {
     var selectedIndex: Int
 }
 
-/// `QUICKMEMO_DATA_DIR` points a dev build at a separate folder, so it can run next to
+/// `QUOTEPAD_DATA_DIR` points a dev build at a separate folder, so it can run next to
 /// the installed app (the single-instance lock lives in this folder too) without touching real notes.
 let appSupportDir: URL = {
     let fm = FileManager.default
-    let dir = ProcessInfo.processInfo.environment["QUICKMEMO_DATA_DIR"].map { URL(fileURLWithPath: $0, isDirectory: true) }
+    let dir = ProcessInfo.processInfo.environment["QUOTEPAD_DATA_DIR"].map { URL(fileURLWithPath: $0, isDirectory: true) }
         ?? fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("QuickMemo", isDirectory: true)
+            .appendingPathComponent("Quotepad", isDirectory: true)
     try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
     return dir
 }()
 let tabsFileURL = appSupportDir.appendingPathComponent("tabs.json")
+
+/// One-time carry-over from the app's former name, QuickMemo. Copies (never moves) notes and
+/// settings, and only fills in what Quotepad doesn't have yet, so the old files stay as a backup.
+func migrateFromQuickMemo(oldDir: URL, newDir: URL, oldDefaultsDomain: [String: Any]?, newDefaults: UserDefaults, newDomainName: String) {
+    let fm = FileManager.default
+    let oldFile = oldDir.appendingPathComponent("tabs.json")
+    let newFile = newDir.appendingPathComponent("tabs.json")
+    if !fm.fileExists(atPath: newFile.path), fm.fileExists(atPath: oldFile.path) {
+        try? fm.copyItem(at: oldFile, to: newFile)
+    }
+
+    let migratedKey = "migratedFromQuickMemo"
+    // Checked against the saved domain, not object(forKey:), which also returns registered defaults.
+    let existing = newDefaults.persistentDomain(forName: newDomainName) ?? [:]
+    guard existing[migratedKey] == nil else { return }
+    for (key, value) in oldDefaultsDomain ?? [:]
+    where !key.hasPrefix("NS") && !key.hasPrefix("Apple") && !key.hasPrefix("com.apple") && existing[key] == nil {
+        newDefaults.set(value, forKey: key)
+    }
+    newDefaults.set(true, forKey: migratedKey)
+}
 let legacyNoteFileURL = appSupportDir.appendingPathComponent("note.txt")
 
 final class OverlayPanel: NSPanel {
@@ -93,6 +114,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory) // no Dock icon, menu-bar only
+        // Only the installed app migrates; dev builds (no bundle id or a custom data dir) never touch real data.
+        if let bundleID = Bundle.main.bundleIdentifier, ProcessInfo.processInfo.environment["QUOTEPAD_DATA_DIR"] == nil {
+            migrateFromQuickMemo(
+                oldDir: appSupportDir.deletingLastPathComponent().appendingPathComponent("QuickMemo", isDirectory: true),
+                newDir: appSupportDir,
+                oldDefaultsDomain: UserDefaults.standard.persistentDomain(forName: "dev.micheal.QuickMemo"),
+                newDefaults: .standard,
+                newDomainName: bundleID
+            )
+        }
         loadState()
         setupStatusItem()
         setupPanel()
@@ -191,7 +222,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
 
     func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        statusItem.button?.image = NSImage(systemSymbolName: "note.text", accessibilityDescription: "QuickMemo")
+        statusItem.button?.image = NSImage(systemSymbolName: "note.text", accessibilityDescription: "Quotepad")
         let menu = NSMenu()
         menu.addItem(NSMenuItem(title: "메모 열기/닫기 (⌘')", action: #selector(toggleOverlay), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "새 탭 (⌘T)", action: #selector(addTabAction), keyEquivalent: ""))
@@ -703,7 +734,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
             return noErr
         }, 1, &eventType, Unmanaged.passUnretained(self).toOpaque(), nil)
 
-        let hotKeyID = EventHotKeyID(signature: OSType(0x514D454D), id: 1) // 'QMEM'
+        let hotKeyID = EventHotKeyID(signature: OSType(0x51504144), id: 1) // 'QPAD'
         RegisterEventHotKey(UInt32(kVK_ANSI_Quote), UInt32(cmdKey), hotKeyID, GetApplicationEventTarget(), 0, &hotKeyRef)
     }
 

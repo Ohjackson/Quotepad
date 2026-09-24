@@ -1,7 +1,7 @@
 import Cocoa
 
 guard acquireSingleInstanceLock() else {
-    fputs("QuickMemo is already running.\n", stderr)
+    fputs("Quotepad is already running.\n", stderr)
     exit(0)
 }
 

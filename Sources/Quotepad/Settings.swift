@@ -96,7 +96,7 @@ extension NSColor {
 /// User preferences in UserDefaults. Every setter posts `didChange` so the UI re-applies live.
 final class Settings {
     static let shared = Settings()
-    static let didChange = Notification.Name("QuickMemo.settingsDidChange")
+    static let didChange = Notification.Name("Quotepad.settingsDidChange")
 
     private let defaults = UserDefaults.standard
 

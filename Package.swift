@@ -2,9 +2,9 @@
 import PackageDescription
 
 let package = Package(
-    name: "QuickMemo",
+    name: "Quotepad",
     platforms: [.macOS(.v13)],
     targets: [
-        .executableTarget(name: "QuickMemo", path: "Sources/QuickMemo")
+        .executableTarget(name: "Quotepad", path: "Sources/Quotepad")
     ]
 )
