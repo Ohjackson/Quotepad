@@ -39,7 +39,7 @@ Some notes don't deserve a Notes.app document: an email address you're about to 
 Quotepad isn't notarized yet, so build it from source. You need macOS 13 or later and the Xcode Command Line Tools (`xcode-select --install`).
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/Quotepad.git
+git clone https://github.com/Ohjackson/Quotepad.git
 cd Quotepad
 ./scripts/build-app.sh --install
 ```
@@ -100,7 +100,7 @@ QUOTEPAD_DATA_DIR=/tmp/quotepad-dev ./.build/release/Quotepad
 
 ## Contributing
 
-Issues and pull requests are welcome. Keep the app small and dependency-free, and make sure `swift build` finishes without warnings.
+Issues and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for how to build, test safely, and send a change.
 
 ## License
 
