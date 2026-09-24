@@ -1,35 +1,107 @@
-# QuickMemo
+<p align="center">
+  <img src="docs/icon.png" width="128" height="128" alt="QuickMemo icon">
+</p>
 
-macOS 메뉴바에 상주하는 오버레이 메모장. 전역 단축키로 어디서든 즉시 메모창을 띄우고 끌 수 있습니다 (Spotlight처럼 동작).
+<h1 align="center">QuickMemo</h1>
 
-## 기능
+<p align="center">
+  A Spotlight-style scratchpad for macOS. Press <kbd>⌘</kbd> <kbd>'</kbd> anywhere, jot it down, and get back to work.
+</p>
 
-- **⌘'** — 오버레이 메모 패널 토글 (전역 단축키, 어떤 앱에서든 동작)
-- 여러 개의 탭을 만들어 메모를 분리해서 관리
-  - **⌘T** — 새 탭 추가 (오버레이가 열려 있을 때)
-  - **⌘W** — 현재 탭 닫기 (탭이 1개 남으면 닫히지 않음)
-  - 탭 클릭으로 전환, 탭 오른쪽 × 버튼으로 닫기
-  - 탭 제목은 메모 첫 줄에서 자동으로 표시됨
-- 입력 내용은 자동 저장되며, 앱을 껐다 켜도 모든 탭이 유지됨
-- **Esc** 또는 다른 곳 클릭 시 패널이 자동으로 숨겨짐
-- Dock에 아이콘이 뜨지 않는 메뉴바 전용 앱 (상태바 아이콘에서 토글/새 탭/탭 닫기/종료 가능)
+<p align="center">
+  <img alt="macOS 13+" src="https://img.shields.io/badge/macOS-13%2B-black?logo=apple">
+  <img alt="Swift 5.9" src="https://img.shields.io/badge/Swift-5.9-F05138?logo=swift&logoColor=white">
+  <img alt="No dependencies" src="https://img.shields.io/badge/dependencies-none-brightgreen">
+  <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue">
+</p>
 
-## 데이터 저장 위치
+<p align="center">
+  <img src="docs/screenshot.png" width="640" alt="QuickMemo overlay with tabs and copyable code boxes">
+</p>
 
-`~/Library/Application Support/QuickMemo/tabs.json`
+## Why
 
-## 빌드 & 실행
+Some notes don't deserve a Notes.app document: an email address you're about to paste, a command you'll run three times today, a phone number from a call. QuickMemo is a single floating panel that appears over whatever you're doing and disappears when you're done. No windows to manage, no Dock icon, no sync, no accounts.
+
+## Features
+
+- **Global hotkey.** <kbd>⌘</kbd> <kbd>'</kbd> toggles the panel from any app, on any Space, even over full-screen apps.
+- **Tabs.** Keep several notes side by side. Tab titles come from each note's first line.
+- **Copyable code boxes.** Type `/code` and press <kbd>Return</kbd> to insert a one-line box for emails, API keys and shell commands. The box scrolls horizontally and has a one-click copy button. Smart quotes and autocorrect are off inside boxes, so what you copy is exactly what you typed.
+- **Survives crashes and power loss.** Notes are saved 1 second after you stop typing (at most 5 seconds during non-stop typing) using `F_FULLFSYNC` and an atomic rename, and are flushed on quit, sleep and shutdown.
+- **Make it yours.** Light/dark theme, seven background tints (sticky-note yellow included), background opacity, font size, and system, monospaced or serif fonts.
+- **Stays out of the way.** Lives in the menu bar, hides when you click elsewhere (optional), remembers its size and, optionally, its position.
+- **Plain text on disk.** Everything lives in one JSON file. Code boxes are stored as Markdown fences, so your notes are readable without the app.
+- **Tiny.** One Swift package with AppKit and nothing else.
+
+## Install
+
+QuickMemo isn't notarized yet, so build it from source. You need macOS 13 or later and the Xcode Command Line Tools (`xcode-select --install`).
+
+```bash
+git clone https://github.com/YOUR_USERNAME/QuickMemo.git
+cd QuickMemo
+./scripts/build-app.sh --install
+```
+
+This builds `QuickMemo.app`, copies it to `~/Applications` and launches it. Look for the note icon in the menu bar.
+
+To start QuickMemo at login, open the gear menu in the panel (or the menu bar icon) and turn on **Launch at login**.
+
+## Usage
+
+| Shortcut | Action |
+| --- | --- |
+| <kbd>⌘</kbd> <kbd>'</kbd> | Show / hide the panel (works everywhere) |
+| <kbd>⌘</kbd> <kbd>T</kbd> | New tab |
+| <kbd>⌘</kbd> <kbd>W</kbd> | Close tab (hides the panel on the last tab) |
+| <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>[</kbd> / <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>]</kbd> | Previous / next tab |
+| <kbd>⌃</kbd> <kbd>Tab</kbd> / <kbd>⌃</kbd> <kbd>⇧</kbd> <kbd>Tab</kbd> | Next / previous tab |
+| <kbd>⌘</kbd> <kbd>,</kbd> | Settings |
+| <kbd>Esc</kbd> | Hide the panel |
+| `/code` <kbd>Return</kbd> | Insert a code box |
+
+Standard editing shortcuts (<kbd>⌘</kbd> <kbd>C</kbd>/<kbd>X</kbd>/<kbd>V</kbd>/<kbd>A</kbd>/<kbd>Z</kbd>, <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>Z</kbd>) work as usual. Shortcuts are matched by key position, so they keep working with non-Latin input sources such as Korean.
+
+Inside a code box, <kbd>Return</kbd> or <kbd>↓</kbd> moves to the line below, <kbd>↑</kbd> moves above, and <kbd>Delete</kbd> in an empty box removes it. Copying a selection that contains boxes puts Markdown fences on the clipboard, and pasting fenced text creates boxes.
+
+Tabs close for good: there's no trash. Click the **×** on a tab, middle-click it, or press <kbd>⌘</kbd> <kbd>W</kbd>.
+
+> [!NOTE]
+> The interface is currently in Korean. Localization pull requests are very welcome.
+
+## Where your notes live
+
+```
+~/Library/Application Support/QuickMemo/tabs.json
+```
+
+Settings are stored in `UserDefaults` under `dev.micheal.QuickMemo`. **Settings → Open data folder** reveals the file in Finder. If the file is ever unreadable, QuickMemo moves it aside as `tabs.corrupt-<timestamp>.json` instead of overwriting it.
+
+## Development
 
 ```bash
 swift build -c release
-./.build/release/QuickMemo &
+QUICKMEMO_DATA_DIR=/tmp/quickmemo-dev ./.build/release/QuickMemo
 ```
 
-## 로그인 시 자동 실행 (선택)
+`QUICKMEMO_DATA_DIR` points a development build at a separate folder so it can run next to your installed copy without touching your real notes. Only one instance can use a given data folder at a time.
 
-시스템 설정 > 일반 > 로그인 항목에 빌드된 `.build/release/QuickMemo` 실행 파일을 추가하면 로그인할 때마다 자동으로 켜집니다.
+| Path | Purpose |
+| --- | --- |
+| `Sources/QuickMemo/AppDelegate.swift` | Panel, tabs, shortcuts, saving, global hotkey |
+| `Sources/QuickMemo/CodeBlock.swift` | Code boxes (TextKit 2 view attachments) and the note ⇄ Markdown codec |
+| `Sources/QuickMemo/TabBarView.swift` | Tab strip UI |
+| `Sources/QuickMemo/DurableStore.swift` | Crash-safe file writes |
+| `Sources/QuickMemo/Settings.swift` | Preferences, background tints, login item |
+| `Sources/QuickMemo/SettingsViewController.swift` | Settings popover |
+| `scripts/build-app.sh` | Builds and installs the `.app` bundle |
+| `scripts/make-icon.swift` | Regenerates `Resources/AppIcon.icns` and `docs/icon.png` |
 
-## 구조
+## Contributing
 
-- `Package.swift` — Swift Package Manager 매니페스트
-- `Sources/QuickMemo/main.swift` — 앱 전체 구현 (AppKit, 전역 단축키는 Carbon HIToolbox 사용)
+Issues and pull requests are welcome. Keep the app small and dependency-free, and make sure `swift build` finishes without warnings.
+
+## License
+
+[MIT](LICENSE) © Jaehyun Ahn
