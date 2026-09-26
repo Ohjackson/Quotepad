@@ -36,15 +36,26 @@ Some notes don't deserve a Notes.app document: an email address you're about to 
 
 ## Install
 
-Quotepad isn't notarized yet, so build it from source. You need macOS 13 or later and the Xcode Command Line Tools (`xcode-select --install`).
+Requires macOS 13 or later.
+
+### Download
+
+1. Download `Quotepad-<version>.dmg` from [Releases](https://github.com/Ohjackson/Quotepad/releases).
+2. Open it and drag **Quotepad** onto **Applications**.
+3. Quotepad isn't notarized by Apple yet, so the first launch is blocked. Open it once, then go to **System Settings → Privacy & Security** and click **Open Anyway**. You only need to do this once.
+
+Look for the note icon in the menu bar, then press <kbd>⌘</kbd> <kbd>'</kbd>.
+
+### Build from source
+
+You need the Xcode Command Line Tools (`xcode-select --install`).
 
 ```bash
 git clone https://github.com/Ohjackson/Quotepad.git
 cd Quotepad
-./scripts/build-app.sh --install
+./scripts/build-app.sh --install   # builds and installs to /Applications
+./scripts/make-dmg.sh              # or: builds build.noindex/Quotepad-<version>.dmg
 ```
-
-This builds `Quotepad.app`, copies it to `~/Applications` and launches it. Look for the note icon in the menu bar.
 
 To start Quotepad at login, open the gear menu in the panel (or the menu bar icon) and turn on **Launch at login**.
 
@@ -95,7 +106,8 @@ QUOTEPAD_DATA_DIR=/tmp/quotepad-dev ./.build/release/Quotepad
 | `Sources/Quotepad/DurableStore.swift` | Crash-safe file writes |
 | `Sources/Quotepad/Settings.swift` | Preferences, background tints, login item |
 | `Sources/Quotepad/SettingsViewController.swift` | Settings popover |
-| `scripts/build-app.sh` | Builds and installs the `.app` bundle |
+| `scripts/build-app.sh` | Builds the `.app` bundle; `--install` copies it to `/Applications` |
+| `scripts/make-dmg.sh` | Builds a drag-to-install `.dmg` for releases |
 | `scripts/make-icon.swift` | Regenerates `Resources/AppIcon.icns` and `docs/icon.png` |
 
 ## Contributing

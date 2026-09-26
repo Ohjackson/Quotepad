@@ -1,5 +1,5 @@
 #!/bin/bash
-# Builds Quotepad.app into ./build.noindex. With --install, replaces ~/Applications/Quotepad.app and launches it.
+# Builds Quotepad.app into ./build.noindex. With --install, replaces /Applications/Quotepad.app and launches it.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -46,12 +46,11 @@ codesign --force --sign - "$APP"
 echo "Built $APP"
 
 if [[ "${1:-}" == "--install" ]]; then
-    DEST="$HOME/Applications/Quotepad.app"
+    DEST="/Applications/Quotepad.app"
     # Graceful quit (SIGTERM) so the running copy flushes its notes first.
     pkill -TERM -x Quotepad 2>/dev/null || true
     for _ in {1..20}; do pgrep -x Quotepad >/dev/null || break; sleep 0.1; done
-    mkdir -p "$HOME/Applications"
-    rm -rf "$DEST"
+    rm -rf "$DEST" "$HOME/Applications/Quotepad.app" # older versions installed per-user
     cp -R "$APP" "$DEST"
     open "$DEST"
     echo "Installed and launched $DEST"
