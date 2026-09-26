@@ -24,27 +24,6 @@ let appSupportDir: URL = {
     return dir
 }()
 let tabsFileURL = appSupportDir.appendingPathComponent("tabs.json")
-
-/// One-time carry-over from the app's former name, QuickMemo. Copies (never moves) notes and
-/// settings, and only fills in what Quotepad doesn't have yet, so the old files stay as a backup.
-func migrateFromQuickMemo(oldDir: URL, newDir: URL, oldDefaultsDomain: [String: Any]?, newDefaults: UserDefaults, newDomainName: String) {
-    let fm = FileManager.default
-    let oldFile = oldDir.appendingPathComponent("tabs.json")
-    let newFile = newDir.appendingPathComponent("tabs.json")
-    if !fm.fileExists(atPath: newFile.path), fm.fileExists(atPath: oldFile.path) {
-        try? fm.copyItem(at: oldFile, to: newFile)
-    }
-
-    let migratedKey = "migratedFromQuickMemo"
-    // Checked against the saved domain, not object(forKey:), which also returns registered defaults.
-    let existing = newDefaults.persistentDomain(forName: newDomainName) ?? [:]
-    guard existing[migratedKey] == nil else { return }
-    for (key, value) in oldDefaultsDomain ?? [:]
-    where !key.hasPrefix("NS") && !key.hasPrefix("Apple") && !key.hasPrefix("com.apple") && existing[key] == nil {
-        newDefaults.set(value, forKey: key)
-    }
-    newDefaults.set(true, forKey: migratedKey)
-}
 let legacyNoteFileURL = appSupportDir.appendingPathComponent("note.txt")
 
 final class OverlayPanel: NSPanel {
@@ -114,16 +93,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory) // no Dock icon, menu-bar only
-        // Only the installed app migrates; dev builds (no bundle id or a custom data dir) never touch real data.
-        if let bundleID = Bundle.main.bundleIdentifier, ProcessInfo.processInfo.environment["QUOTEPAD_DATA_DIR"] == nil {
-            migrateFromQuickMemo(
-                oldDir: appSupportDir.deletingLastPathComponent().appendingPathComponent("QuickMemo", isDirectory: true),
-                newDir: appSupportDir,
-                oldDefaultsDomain: UserDefaults.standard.persistentDomain(forName: "dev.micheal.QuickMemo"),
-                newDefaults: .standard,
-                newDomainName: bundleID
-            )
-        }
         loadState()
         setupStatusItem()
         setupPanel()
