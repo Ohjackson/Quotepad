@@ -1,9 +1,9 @@
 #!/bin/bash
-# Builds Quotepad.app into ./build. With --install, replaces ~/Applications/Quotepad.app and launches it.
+# Builds Quotepad.app into ./build.noindex. With --install, replaces ~/Applications/Quotepad.app and launches it.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-APP="build/Quotepad.app"
+APP="build.noindex/Quotepad.app" # .noindex keeps Spotlight from listing a second copy
 VERSION="1.0"
 
 swift build -c release
