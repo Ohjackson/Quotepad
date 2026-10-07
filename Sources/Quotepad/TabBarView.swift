@@ -1,9 +1,5 @@
 import Cocoa
 
-final class FlippedView: NSView {
-    override var isFlipped: Bool { true }
-}
-
 final class SeparatorView: NSView {
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -74,13 +70,17 @@ final class IconButton: NSView {
     override func viewDidChangeEffectiveAppearance() { needsDisplay = true }
 }
 
-/// Safari-style tab: centered title, close button appears on the left on hover/selection.
+/// Safari-style tab: a softly lit rounded chip with a centered title; the close button
+/// appears on the left on hover/selection.
 final class TabItemView: NSView {
     static let closeSize: CGFloat = 16
     static let closeInset: CGFloat = 5
     // Symmetric space reserved on both sides so the centered title never overlaps the close button.
     static let sideInset: CGFloat = closeInset + closeSize + 4
-    static let minWidth: CGFloat = 80
+    // Below this width the title gives up centering and only makes room for the close button when it's shown.
+    static let compactWidth: CGFloat = sideInset * 2 + 36
+    static let compactInset: CGFloat = 7
+    static let minWidth: CGFloat = 64
     static let maxWidth: CGFloat = 180
 
     var onSelect: (() -> Void)?
@@ -106,6 +106,7 @@ final class TabItemView: NSView {
         titleLabel.lineBreakMode = .byTruncatingTail
         titleLabel.maximumNumberOfLines = 1
         titleLabel.alignment = .center
+        titleLabel.cell?.truncatesLastVisibleLine = true
         addSubview(titleLabel)
         closeButton.onClick = { [weak self] in self?.onClose?() }
         addSubview(closeButton)
@@ -129,34 +130,44 @@ final class TabItemView: NSView {
         return min(max(width, Self.minWidth), Self.maxWidth)
     }
 
+    private var closeVisible: Bool { isClosable && (isSelected || hovered) }
+
     private func refresh() {
         titleLabel.font = .systemFont(ofSize: 12, weight: isSelected ? .medium : .regular)
         titleLabel.textColor = isSelected ? .labelColor : .secondaryLabelColor
-        closeButton.isHidden = !(isClosable && (isSelected || hovered))
+        closeButton.isHidden = !closeVisible
         setAccessibilitySelected(isSelected)
         needsDisplay = true
+        layoutContents()
     }
 
     override var wantsUpdateLayer: Bool { true }
     override func updateLayer() {
         layer?.cornerRadius = 7
-        let alpha: CGFloat = isSelected ? 0.10 : (hovered ? 0.05 : 0)
+        let alpha: CGFloat = isSelected ? 0.15 : (hovered ? 0.10 : 0.06)
         layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(alpha).cgColor
     }
 
     override func resizeSubviews(withOldSize oldSize: NSSize) {
+        layoutContents()
+    }
+
+    private func layoutContents() {
         closeButton.frame = NSRect(
             x: Self.closeInset,
             y: (bounds.height - Self.closeSize) / 2,
             width: Self.closeSize,
             height: Self.closeSize
         )
+        let compact = bounds.width < Self.compactWidth
+        let left = compact ? (closeVisible ? Self.sideInset : Self.compactInset) : Self.sideInset
+        let right = compact ? Self.compactInset : Self.sideInset
         // NSTextField labels pad their text by 2pt per side; widen the frame to compensate.
         let labelHeight = titleLabel.intrinsicContentSize.height
         titleLabel.frame = NSRect(
-            x: Self.sideInset - 2,
+            x: left - 2,
             y: (bounds.height - labelHeight) / 2,
-            width: max(0, bounds.width - Self.sideInset * 2 + 4),
+            width: max(0, bounds.width - left - right + 4),
             height: labelHeight
         )
     }
@@ -178,8 +189,9 @@ final class TabItemView: NSView {
     override func viewDidChangeEffectiveAppearance() { needsDisplay = true }
 }
 
-/// Browser-style tab strip: left-aligned tabs, "+" right after the last tab,
-/// horizontal scrolling when tabs overflow (with "+" pinned to the right edge).
+/// Browser-style tab strip: left-aligned tabs with "+" right after the last one. Every tab stays
+/// visible: when space runs out the widest tabs shrink first (titles truncate with "…"), and tabs
+/// that still don't fit at their minimum width move into a "···" menu. The selected tab is always shown.
 final class TabBarView: NSView {
     static let tabHeight: CGFloat = 26
     static let spacing: CGFloat = 4
@@ -189,32 +201,27 @@ final class TabBarView: NSView {
     var onClose: ((Int) -> Void)?
     var onAdd: (() -> Void)?
 
-    private let scrollView = NSScrollView()
-    private let strip = FlippedView()
     private let addButton = IconButton(symbolName: "plus", pointSize: 11, weight: .semibold, cornerRadius: 6, label: "새 탭")
+    private let overflowButton = IconButton(symbolName: "ellipsis", pointSize: 11, weight: .semibold, cornerRadius: 6, label: "다른 탭")
     private var items: [TabItemView] = []
     private var selectedIndex = 0
+    private var hiddenIndices: [Int] = []
 
     override init(frame: NSRect) {
         super.init(frame: frame)
-        scrollView.drawsBackground = false
-        scrollView.hasHorizontalScroller = false
-        scrollView.hasVerticalScroller = false
-        scrollView.horizontalScrollElasticity = .allowed
-        scrollView.verticalScrollElasticity = .none
-        scrollView.documentView = strip
-        addSubview(scrollView)
-
         addButton.toolTip = "새 탭 (⌘T)"
         addButton.onClick = { [weak self] in self?.onAdd?() }
         addSubview(addButton)
+
+        overflowButton.onClick = { [weak self] in self?.showOverflowMenu() }
+        addSubview(overflowButton)
     }
     required init?(coder: NSCoder) { fatalError() }
 
     func update(titles: [String], selectedIndex: Int) {
         while items.count < titles.count {
             let item = TabItemView()
-            strip.addSubview(item)
+            addSubview(item)
             items.append(item)
         }
         while items.count > titles.count {
@@ -230,7 +237,6 @@ final class TabBarView: NSView {
         }
         self.selectedIndex = selectedIndex
         relayout()
-        scrollSelectedIntoView()
     }
 
     override func resizeSubviews(withOldSize oldSize: NSSize) {
@@ -239,27 +245,71 @@ final class TabBarView: NSView {
 
     private func relayout() {
         let y = (bounds.height - Self.tabHeight) / 2
-        var x: CGFloat = 0
-        for item in items {
-            let width = item.preferredWidth
-            item.frame = NSRect(x: x, y: y, width: width, height: Self.tabHeight)
-            x += width + Self.spacing
+        let budget = max(0, bounds.width - Self.addSize - Self.spacing)
+
+        var visible = Array(items.indices)
+        var widths = Self.fit(items.map(\.preferredWidth), into: budget - Self.spacing * CGFloat(max(0, items.count - 1)))
+        hiddenIndices = []
+        if widths.contains(where: { $0 < TabItemView.minWidth }) {
+            // Overflow: as many minimum-width tabs as fit next to "···", stretched evenly.
+            let room = budget - Self.addSize - Self.spacing
+            let count = max(1, Int((room + Self.spacing) / (TabItemView.minWidth + Self.spacing)))
+            visible = Array(items.indices.prefix(count))
+            if !visible.contains(selectedIndex), items.indices.contains(selectedIndex) {
+                visible[visible.count - 1] = selectedIndex
+            }
+            hiddenIndices = items.indices.filter { !visible.contains($0) }
+            let width = min(TabItemView.maxWidth, (room - Self.spacing * CGFloat(count - 1)) / CGFloat(count))
+            widths = Array(repeating: max(0, floor(width)), count: count)
         }
-        let contentWidth = max(0, x - Self.spacing)
-        let visibleWidth = min(contentWidth, max(0, bounds.width - Self.addSize - Self.spacing))
-        strip.frame = NSRect(x: 0, y: 0, width: contentWidth, height: bounds.height)
-        scrollView.frame = NSRect(x: 0, y: 0, width: visibleWidth, height: bounds.height)
-        addButton.frame = NSRect(
-            x: visibleWidth + Self.spacing,
-            y: (bounds.height - Self.addSize) / 2,
-            width: Self.addSize,
-            height: Self.addSize
-        )
+
+        var x: CGFloat = 0
+        for (slot, index) in visible.enumerated() {
+            items[index].isHidden = false
+            items[index].frame = NSRect(x: x, y: y, width: widths[slot], height: Self.tabHeight)
+            x += widths[slot] + Self.spacing
+        }
+        for index in hiddenIndices { items[index].isHidden = true }
+
+        overflowButton.isHidden = hiddenIndices.isEmpty
+        if !hiddenIndices.isEmpty {
+            overflowButton.frame = NSRect(x: x, y: (bounds.height - Self.addSize) / 2, width: Self.addSize, height: Self.addSize)
+            overflowButton.toolTip = "다른 탭 \(hiddenIndices.count)개"
+            x += Self.addSize + Self.spacing
+        }
+        addButton.frame = NSRect(x: x, y: (bounds.height - Self.addSize) / 2, width: Self.addSize, height: Self.addSize)
     }
 
-    private func scrollSelectedIntoView() {
-        guard items.indices.contains(selectedIndex) else { return }
-        strip.scrollToVisible(items[selectedIndex].frame.insetBy(dx: -8, dy: 0))
+    /// Shrinks the widest entries first until the total fits `budget`; unchanged when it already fits.
+    private static func fit(_ preferred: [CGFloat], into budget: CGFloat) -> [CGFloat] {
+        guard preferred.reduce(0, +) > budget else { return preferred }
+        let sorted = preferred.sorted()
+        var remaining = budget
+        var cap = sorted.last ?? 0
+        for (position, width) in sorted.enumerated() {
+            let share = remaining / CGFloat(sorted.count - position)
+            if share < width {
+                cap = share
+                break
+            }
+            remaining -= width
+        }
+        return preferred.map { floor(min($0, cap)) }
+    }
+
+    private func showOverflowMenu() {
+        let menu = NSMenu()
+        for index in hiddenIndices {
+            let item = NSMenuItem(title: items[index].title, action: #selector(overflowItemChosen(_:)), keyEquivalent: "")
+            item.target = self
+            item.tag = index
+            menu.addItem(item)
+        }
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: -4), in: overflowButton)
+    }
+
+    @objc private func overflowItemChosen(_ sender: NSMenuItem) {
+        onSelect?(sender.tag)
     }
 
     // Empty bar area: double-click opens a new tab, drag moves the window.
