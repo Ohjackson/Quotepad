@@ -241,6 +241,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         let attributes = editorAttributes
         textView.font = attributes[.font] as? NSFont
         textView.typingAttributes = attributes
+        restyleMarkdown()
+    }
+
+    /// Re-applies the Markdown look. Skipped mid-composition so the IME's marked text stays intact;
+    /// committing the composition is an edit of its own and restyles.
+    func restyleMarkdown() {
+        guard let storage = textView.textStorage, !textView.hasMarkedText() else { return }
+        Markdown.style(storage, base: editorAttributes)
+        // A fresh line starts plain instead of inheriting the previous line's heading font.
+        let caret = textView.selectedRange().location
+        let text = storage.string as NSString
+        if caret == 0 || (caret <= text.length && text.character(at: caret - 1) == 0x0A) {
+            textView.typingAttributes = editorAttributes
+        }
     }
 
     @objc func toggleSettings() {
@@ -461,6 +475,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     }
 
     func textDidChange(_ notification: Notification) {
+        restyleMarkdown()
         commitCurrentText()
         refreshTabBar()
         scheduleSave()
@@ -620,7 +635,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         for line in tab.text.split(whereSeparator: \.isNewline) {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             if !trimmed.isEmpty && trimmed != NoteCodec.fence {
-                return String(trimmed.prefix(80))
+                return String(Markdown.strippingHeading(trimmed).prefix(80))
             }
         }
         return "새 메모"
@@ -636,6 +651,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
             textView.inputContext?.discardMarkedText()
         }
         textView.textStorage?.setAttributedString(NoteCodec.decode(tabs[selectedIndex].text, attributes: editorAttributes, host: self))
+        restyleMarkdown()
         textView.undoManager?.removeAllActions() // undo must not cross tabs
         textView.setSelectedRange(NSRange(location: (textView.string as NSString).length, length: 0))
     }
