@@ -484,9 +484,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     // MARK: - Code boxes
 
     func textView(_ textView: NSTextView, doCommandBy selector: Selector) -> Bool {
-        guard selector == #selector(NSResponder.insertNewline(_:)),
-              let lineRange = codeTriggerLineRange() else { return false }
-        insertCodeBlock(replacing: lineRange)
+        guard selector == #selector(NSResponder.insertNewline(_:)) else { return false }
+        if let lineRange = codeTriggerLineRange() {
+            insertCodeBlock(replacing: lineRange)
+            return true
+        }
+        return continueMarkdownList()
+    }
+
+    /// Return on a list/quote line starts the next item; on an empty item it ends the list.
+    func continueMarkdownList() -> Bool {
+        let selection = textView.selectedRange()
+        guard selection.length == 0, !textView.hasMarkedText(),
+              let continuation = Markdown.continuation(in: textView.string as NSString, caret: selection.location) else { return false }
+        switch continuation {
+        case .next(let marker):
+            textView.insertText("\n" + marker, replacementRange: selection)
+        case .end(let marker):
+            textView.insertText("", replacementRange: marker)
+        }
         return true
     }
 

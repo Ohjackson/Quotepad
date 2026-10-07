@@ -168,6 +168,47 @@ enum Markdown {
         return NSFont(descriptor: descriptor, size: font.pointSize) ?? font
     }
 
+    // MARK: - Return key in lists
+
+    enum Continuation {
+        /// Start the next line with this marker.
+        case next(String)
+        /// The item is empty: remove its marker to end the list.
+        case end(NSRange)
+    }
+
+    /// What Return should do on a list or quote line, given the caret position. Nil for normal lines.
+    static func continuation(in text: NSString, caret: Int) -> Continuation? {
+        var start = 0, contentsEnd = 0
+        text.getLineStart(&start, end: nil, contentsEnd: &contentsEnd, for: NSRange(location: caret, length: 0))
+        let line = NSRange(location: start, length: contentsEnd - start)
+        guard match(rule, in: text, line) == nil else { return nil }
+
+        let marker: NSRange
+        let next: String
+        if let m = match(task, in: text, line) {
+            marker = m.range
+            next = text.substring(with: m.range(at: 1)) + text.substring(with: m.range(at: 2)) + " [ ] "
+        } else if let m = match(list, in: text, line) {
+            marker = m.range
+            let indent = text.substring(with: m.range(at: 1))
+            if m.range(at: 3).location != NSNotFound, let number = Int(text.substring(with: m.range(at: 3))) {
+                next = indent + "\(number + 1)" + text.substring(with: m.range(at: 4)) + " "
+            } else {
+                next = indent + text.substring(with: m.range(at: 2)) + " "
+            }
+        } else if let m = match(quote, in: text, line) {
+            marker = m.range
+            next = text.substring(with: m.range).hasSuffix(">") ? text.substring(with: m.range) + " " : text.substring(with: m.range)
+        } else {
+            return nil
+        }
+
+        guard caret >= NSMaxRange(marker) else { return nil } // caret inside the marker: plain Return
+        if NSMaxRange(marker) == NSMaxRange(line) { return .end(marker) }
+        return .next(next)
+    }
+
     /// The text of a heading line without its leading "#"s, for tab titles.
     static func strippingHeading(_ line: String) -> String {
         let ns = line as NSString
