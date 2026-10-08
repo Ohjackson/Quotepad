@@ -650,8 +650,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     func tabTitle(for tab: NoteTab) -> String {
         for line in tab.text.split(whereSeparator: \.isNewline) {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if !trimmed.isEmpty && trimmed != NoteCodec.fence {
-                return String(Markdown.strippingHeading(trimmed).prefix(80))
+            guard trimmed != NoteCodec.fence else { continue }
+            let title = Markdown.strippingHeading(trimmed)
+            if !title.isEmpty {
+                return String(title.prefix(80))
             }
         }
         return "새 메모"

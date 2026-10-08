@@ -9,6 +9,7 @@ import Cocoa
 
 enum Markdown {
     private static let heading = regex(#"^(#{1,6})[ \t]+"#)
+    private static let titleHeading = regex(#"^#{1,6}(?:[ \t]+|$)"#) // also a bare "##" (titles are trimmed)
     private static let rule = regex(#"^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$"#)
     private static let quote = regex(#"^ {0,3}>[ \t]?"#)
     private static let task = regex(#"^([ \t]*)([-*+])[ \t]+(\[([ xX])\])[ \t]+"#)
@@ -212,7 +213,7 @@ enum Markdown {
     /// The text of a heading line without its leading "#"s, for tab titles.
     static func strippingHeading(_ line: String) -> String {
         let ns = line as NSString
-        guard let m = match(heading, in: ns, NSRange(location: 0, length: ns.length)) else { return line }
+        guard let m = match(titleHeading, in: ns, NSRange(location: 0, length: ns.length)) else { return line }
         return ns.substring(from: NSMaxRange(m.range))
     }
 }
