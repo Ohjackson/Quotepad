@@ -531,8 +531,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     func textView(_ textView: NSTextView, doCommandBy selector: Selector) -> Bool {
         if selector == #selector(NSResponder.deleteBackward(_:)) { return deleteBackwardOverHiddenMarkdown() }
         guard selector == #selector(NSResponder.insertNewline(_:)) else { return false }
-        if let (lineRange, kind) = codeTriggerLine() {
-            insertCodeBlock(kind, replacing: lineRange)
+        if let (lineRange, kind, language) = codeTriggerLine() {
+            insertCodeBlock(kind, language: language, replacing: lineRange)
             return true
         }
         return continueMarkdownList()
@@ -553,7 +553,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     }
 
     /// The caret's line content, if the whole line is a box trigger like "/code" or "/p".
-    func codeTriggerLine() -> (NSRange, CodeBlockKind)? {
+    func codeTriggerLine() -> (NSRange, CodeBlockKind, String?)? {
         let selection = textView.selectedRange()
         guard selection.length == 0, !textView.hasMarkedText() else { return nil }
         let text = textView.string as NSString
@@ -561,12 +561,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         text.getLineStart(&start, end: nil, contentsEnd: &contentsEnd, for: NSRange(location: selection.location, length: 0))
         let range = NSRange(location: start, length: contentsEnd - start)
         let line = text.substring(with: range).trimmingCharacters(in: .whitespaces).lowercased()
-        return NoteCodec.trigger(line).map { (range, $0) }
+        return NoteCodec.trigger(line).map { (range, $0.0, $0.language) }
     }
 
-    func insertCodeBlock(_ kind: CodeBlockKind, replacing range: NSRange) {
+    func insertCodeBlock(_ kind: CodeBlockKind, language: String? = nil, replacing range: NSRange) {
         guard let storage = textView.textStorage else { return }
-        let attachment = CodeBlockAttachment(content: "", kind: kind)
+        let attachment = CodeBlockAttachment(content: "", kind: kind, language: language)
         attachment.host = self
         attachment.focusWhenLoaded = true
 
@@ -707,7 +707,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     func tabTitle(for tab: NoteTab) -> String {
         for line in tab.text.split(whereSeparator: \.isNewline) {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
-            guard trimmed != NoteCodec.fence && trimmed != NoteCodec.codeFence else { continue }
+            guard trimmed != NoteCodec.fence && NoteCodec.codeFenceLanguage(trimmed) == nil else { continue }
             let title = Markdown.strippingHeading(trimmed)
             if !title.isEmpty {
                 return String(title.prefix(80))

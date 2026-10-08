@@ -3,12 +3,12 @@ import Cocoa
 // Boxes with a copy button, embedded in the note as TextKit 2 view attachments. On disk they're
 // Markdown fences, so notes stay plain text. Two kinds:
 //
-//  - Snippet (`/p`): one line for emails, keys, commands.  - Code (`/code`): multi-line code.
+//  - Snippet (`/p`): one line for emails, keys, commands.
+//  - Code (`/code`, `/code python`): multi-line code with syntax coloring for the chosen language.
 //
-//     ```                                                   ~~~
-//     someone@example.com                                   func hello() {
+//     ```                                                   ~~~python
+//     someone@example.com                                   def hello():
 //     ```                                                       print("hi")
-//                                                           }
 //                                                           ~~~
 //
 // Both scroll horizontally instead of wrapping.
@@ -32,6 +32,8 @@ enum CodeBlockKind {
 final class CodeBlockAttachment: NSTextAttachment {
     let kind: CodeBlockKind
     var content: String
+    /// `CodeLanguage.id` of a code block; nil for plain text.
+    var language: String?
     weak var host: CodeBlockHost?
     /// Set when the box is created by the user; the view grabs focus as soon as it's on screen.
     var focusWhenLoaded = false
@@ -39,9 +41,10 @@ final class CodeBlockAttachment: NSTextAttachment {
 
     var lineCount: Int { kind == .snippet ? 1 : content.components(separatedBy: "\n").count }
 
-    init(content: String, kind: CodeBlockKind) {
+    init(content: String, kind: CodeBlockKind, language: String? = nil) {
         self.kind = kind
         self.content = content
+        self.language = language
         super.init(data: nil, ofType: nil)
         allowsTextAttachmentView = true
         // Without an image, TextKit also draws a generic document icon under the view,
@@ -79,8 +82,8 @@ final class CodeBlockViewProvider: NSTextAttachmentViewProvider {
     ) -> CGRect {
         let padding = textContainer?.lineFragmentPadding ?? 5
         let width = max(120, proposedLineFragment.width - padding * 2)
-        let lines = (textAttachment as? CodeBlockAttachment)?.lineCount ?? 1
-        return CGRect(x: 0, y: -CodeBlockView.baselineOffset, width: width, height: CodeBlockView.height(lines: lines))
+        guard let attachment = textAttachment as? CodeBlockAttachment else { return .zero }
+        return CGRect(x: 0, y: -CodeBlockView.baselineOffset, width: width, height: CodeBlockView.height(for: attachment))
     }
 }
 
@@ -122,9 +125,15 @@ final class CodeBlockView: NSView, NSTextViewDelegate {
     /// Space above and below the text inside the box (a one-line box is 40pt tall).
     private static let innerPadding: CGFloat = (40 - verticalMargin * 2 - lineHeight) / 2
     private static let indent = "    "
+    /// Code blocks have a row above the code for the language menu and the copy button.
+    private static let headerHeight: CGFloat = 26
 
-    static func height(lines: Int) -> CGFloat {
-        CGFloat(max(1, lines)) * lineHeight + (innerPadding + verticalMargin) * 2
+    static func height(for attachment: CodeBlockAttachment) -> CGFloat {
+        let text = CGFloat(attachment.lineCount) * lineHeight
+        switch attachment.kind {
+        case .snippet: return text + (innerPadding + verticalMargin) * 2
+        case .code: return text + headerHeight + innerPadding + verticalMargin * 2
+        }
     }
 
     let attachment: CodeBlockAttachment
@@ -133,12 +142,13 @@ final class CodeBlockView: NSView, NSTextViewDelegate {
     private let editor = NSTextView()
     private let placeholder = NSTextField(labelWithString: "")
     private let copyButton = IconButton(symbolName: "doc.on.doc", pointSize: 11, weight: .medium, cornerRadius: 5, label: "복사")
+    private let languageMenu = NSPopUpButton(frame: .zero, pullsDown: false)
     private var copyResetWork: DispatchWorkItem?
     private var isCode: Bool { attachment.kind == .code }
 
     init(attachment: CodeBlockAttachment) {
         self.attachment = attachment
-        super.init(frame: NSRect(x: 0, y: 0, width: 300, height: Self.height(lines: attachment.lineCount)))
+        super.init(frame: NSRect(x: 0, y: 0, width: 300, height: Self.height(for: attachment)))
         addSubview(box)
 
         editor.isRichText = false
@@ -184,6 +194,24 @@ final class CodeBlockView: NSView, NSTextViewDelegate {
         copyButton.onClick = { [weak self] in self?.copyContent() }
         addSubview(copyButton)
 
+        if isCode {
+            languageMenu.isBordered = false
+            languageMenu.controlSize = .small
+            languageMenu.font = .systemFont(ofSize: 11)
+            languageMenu.addItem(withTitle: "텍스트")
+            for language in CodeLanguage.all {
+                languageMenu.addItem(withTitle: language.name)
+                languageMenu.lastItem?.representedObject = language.id
+            }
+            let selected = CodeLanguage.all.firstIndex { $0.id == attachment.language }.map { $0 + 1 } ?? 0
+            languageMenu.selectItem(at: selected)
+            languageMenu.target = self
+            languageMenu.action = #selector(languageChosen)
+            languageMenu.toolTip = "언어"
+            addSubview(languageMenu)
+            highlight()
+        }
+
         setAccessibilityRole(.group)
         setAccessibilityLabel(isCode ? "코드 블록" : "복사 박스")
     }
@@ -192,17 +220,35 @@ final class CodeBlockView: NSView, NSTextViewDelegate {
     override func resizeSubviews(withOldSize oldSize: NSSize) {
         box.frame = bounds.insetBy(dx: 0, dy: Self.verticalMargin)
         let buttonSize: CGFloat = 22
-        // The copy button sits beside the first line (the only line of a snippet).
-        let firstLineMidY = box.frame.maxY - Self.innerPadding - Self.lineHeight / 2
-        copyButton.frame = NSRect(x: box.frame.maxX - 6 - buttonSize, y: firstLineMidY - buttonSize / 2, width: buttonSize, height: buttonSize)
         let textX = box.frame.minX + 12
         let textHeight = CGFloat(attachment.lineCount) * Self.lineHeight
-        let textFrame = NSRect(
-            x: textX,
-            y: box.frame.maxY - Self.innerPadding - textHeight,
-            width: max(0, copyButton.frame.minX - 8 - textX),
-            height: textHeight
-        )
+        let textFrame: NSRect
+        if isCode {
+            // Header row: language menu on the left, copy button on the right; code below at full width.
+            let headerMidY = box.frame.maxY - Self.headerHeight / 2
+            copyButton.frame = NSRect(x: box.frame.maxX - 6 - buttonSize, y: headerMidY - buttonSize / 2, width: buttonSize, height: buttonSize)
+            // Sized to the chosen name (sizeToFit would use the longest one), plus room for the arrows.
+            languageMenu.sizeToFit()
+            let menuHeight = languageMenu.frame.height
+            let title = (languageMenu.titleOfSelectedItem ?? "") as NSString
+            let titleWidth = title.size(withAttributes: [.font: languageMenu.font ?? .systemFont(ofSize: 11)]).width
+            languageMenu.frame = NSRect(x: textX - 4, y: (headerMidY - menuHeight / 2).rounded(), width: ceil(titleWidth) + 28, height: menuHeight)
+            textFrame = NSRect(
+                x: textX,
+                y: box.frame.maxY - Self.headerHeight - textHeight,
+                width: max(0, box.frame.maxX - 12 - textX),
+                height: textHeight
+            )
+        } else {
+            // The copy button sits beside the only line.
+            copyButton.frame = NSRect(x: box.frame.maxX - 6 - buttonSize, y: box.frame.midY - buttonSize / 2, width: buttonSize, height: buttonSize)
+            textFrame = NSRect(
+                x: textX,
+                y: box.frame.midY - textHeight / 2,
+                width: max(0, copyButton.frame.minX - 8 - textX),
+                height: textHeight
+            )
+        }
         scrollView.frame = textFrame
         placeholder.frame = NSRect(x: textX, y: textFrame.maxY - Self.lineHeight, width: textFrame.width, height: Self.lineHeight)
         // Fill the visible width so clicks on the empty right side still land in the editor.
@@ -242,9 +288,23 @@ final class CodeBlockView: NSView, NSTextViewDelegate {
 
     // MARK: - NSTextViewDelegate
 
+    @objc private func languageChosen() {
+        attachment.language = languageMenu.selectedItem?.representedObject as? String
+        highlight()
+        resizeSubviews(withOldSize: bounds.size) // the menu's width follows the name
+        attachment.host?.codeBlockDidChange(attachment)
+        window?.makeFirstResponder(editor)
+    }
+
+    private func highlight() {
+        guard isCode, !editor.hasMarkedText(), let storage = editor.textStorage else { return }
+        SyntaxHighlighter.highlight(storage, language: attachment.language.flatMap(CodeLanguage.find), font: Self.font)
+    }
+
     func textDidChange(_ notification: Notification) {
         let oldLineCount = attachment.lineCount
         attachment.content = editor.string
+        highlight()
         placeholder.isHidden = !editor.string.isEmpty
         if attachment.lineCount != oldLineCount {
             attachment.host?.codeBlockDidResize(attachment) // the new frame lays out the subviews
@@ -334,10 +394,23 @@ enum NoteCodec {
     static let snippetTriggers: Set<String> = ["/p", "/ㅔ"]
     static let codeTriggers: Set<String> = ["/code", "/코드", "/챙ㄷ"]
 
-    static func trigger(_ line: String) -> CodeBlockKind? {
-        if snippetTriggers.contains(line) { return .snippet }
-        if codeTriggers.contains(line) { return .code }
+    /// The box a trigger line asks for. `/code python` (any language name or alias) also picks the language.
+    static func trigger(_ line: String) -> (CodeBlockKind, language: String?)? {
+        if snippetTriggers.contains(line) { return (.snippet, nil) }
+        if codeTriggers.contains(line) { return (.code, nil) }
+        let parts = line.split(separator: " ", maxSplits: 1).map(String.init)
+        if parts.count == 2, codeTriggers.contains(parts[0]),
+           let language = CodeLanguage.find(parts[1].trimmingCharacters(in: .whitespaces)) {
+            return (.code, language.id)
+        }
         return nil
+    }
+
+    /// "~~~" or "~~~python": the language after a code fence, "" for none.
+    static func codeFenceLanguage(_ line: String) -> String? {
+        guard line.hasPrefix(codeFence) else { return nil }
+        let tag = line.dropFirst(codeFence.count).trimmingCharacters(in: .whitespaces)
+        return tag.contains("~") ? nil : tag
     }
 
     static func containsFence(_ text: String) -> Bool {
@@ -362,10 +435,12 @@ enum NoteCodec {
                 attachment.host = host
                 result.append(attachmentString(attachment, attributes: attributes))
                 index += 3
-            } else if lines[index] == codeFence,
+            } else if let tag = codeFenceLanguage(lines[index]),
                       let close = lines[(index + 1)...].firstIndex(of: codeFence) {
                 let content = lines[(index + 1)..<close].joined(separator: "\n")
-                let attachment = CodeBlockAttachment(content: content, kind: .code)
+                // Unknown tags (e.g. "ruby") are kept as written, just not colored.
+                let language = tag.isEmpty ? nil : CodeLanguage.find(tag)?.id ?? tag
+                let attachment = CodeBlockAttachment(content: content, kind: .code, language: language)
                 attachment.host = host
                 result.append(attachmentString(attachment, attributes: attributes))
                 index = close + 1
@@ -384,8 +459,10 @@ enum NoteCodec {
         attributed.enumerateAttribute(.attachment, in: NSRange(location: 0, length: attributed.length)) { value, range, _ in
             guard let block = value as? CodeBlockAttachment else { return }
             output += source.substring(with: NSRange(location: cursor, length: range.location - cursor))
-            let blockFence = block.kind == .snippet ? fence : codeFence
-            output += "\(blockFence)\n\(block.content)\n\(blockFence)"
+            switch block.kind {
+            case .snippet: output += "\(fence)\n\(block.content)\n\(fence)"
+            case .code: output += "\(codeFence)\(block.language ?? "")\n\(block.content)\n\(codeFence)"
+            }
             cursor = range.location + range.length
         }
         output += source.substring(from: cursor)
