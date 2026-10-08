@@ -249,11 +249,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     func restyleMarkdown() {
         guard let storage = textView.textStorage, !textView.hasMarkedText() else { return }
         Markdown.style(storage, base: editorAttributes)
-        // A fresh line starts plain instead of inheriting the previous line's heading font.
-        let caret = textView.selectedRange().location
-        let text = storage.string as NSString
-        if caret == 0 || (caret <= text.length && text.character(at: caret - 1) == 0x0A) {
-            textView.typingAttributes = editorAttributes
+        updateTypingAttributes()
+    }
+
+    /// A plain-text view never takes typing attributes from the text, so new text (and IME
+    /// composition) would keep whatever look was set last; match the caret's line instead.
+    func updateTypingAttributes() {
+        guard !textView.hasMarkedText() else { return }
+        textView.typingAttributes = Markdown.typingAttributes(
+            at: textView.selectedRange().location, in: textView.string as NSString, base: editorAttributes)
+    }
+
+    func textViewDidChangeSelection(_ notification: Notification) {
+        updateTypingAttributes()
+    }
+
+    /// Keeps the caret out of hidden marks, so it never sits somewhere that looks the same but types differently.
+    func textView(_ textView: NSTextView, willChangeSelectionFromCharacterRange oldRange: NSRange,
+                  toCharacterRange newRange: NSRange) -> NSRange {
+        guard textView === self.textView, newRange.length == 0, let storage = textView.textStorage,
+              let run = Markdown.hiddenRun(trapping: newRange.location, in: storage) else { return newRange }
+        let start = run.range.location, end = NSMaxRange(run.range)
+        switch run.kind {
+        case .block:
+            // ← from the start of a heading's text goes on to the previous line.
+            let leftFromText = oldRange.length == 0 && oldRange.location == end && newRange.location < end
+            return NSRange(location: leftFromText && start > 0 ? start - 1 : end, length: 0)
+        case .inline:
+            return NSRange(location: newRange.location > oldRange.location ? end : start, length: 0)
+        }
+    }
+
+    /// Backspace right after a hidden mark: a heading/quote mark goes as a whole (the line turns
+    /// plain); for inline marks the visible character before them is deleted instead.
+    func deleteBackwardOverHiddenMarkdown() -> Bool {
+        let selection = textView.selectedRange()
+        guard selection.length == 0, !textView.hasMarkedText(), let storage = textView.textStorage,
+              var run = Markdown.hiddenRun(endingAt: selection.location, in: storage) else { return false }
+        // Walk back over adjacent marks, e.g. the "**" of "# **bold**" sits right after the heading's "# ".
+        while run.kind == .inline, let previous = Markdown.hiddenRun(endingAt: run.range.location, in: storage) {
+            run = previous
+        }
+        switch run.kind {
+        case .block:
+            textView.insertText("", replacementRange: run.range)
+            return true
+        case .inline:
+            textView.setSelectedRange(NSRange(location: run.range.location, length: 0))
+            return false // the text view now deletes the character before the mark
         }
     }
 
@@ -484,6 +527,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     // MARK: - Code boxes
 
     func textView(_ textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        if selector == #selector(NSResponder.deleteBackward(_:)) { return deleteBackwardOverHiddenMarkdown() }
         guard selector == #selector(NSResponder.insertNewline(_:)) else { return false }
         if let lineRange = codeTriggerLineRange() {
             insertCodeBlock(replacing: lineRange)

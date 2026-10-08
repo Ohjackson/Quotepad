@@ -1,7 +1,8 @@
 import Cocoa
 
 // Live Markdown look for the note editor. Only attributes change, never the text: syntax marks
-// stay in place (dimmed), so notes remain plain Markdown on disk and when copied.
+// stay in the note but are drawn invisibly (list, rule and fence marks stay visible, dimmed),
+// so notes remain plain Markdown on disk and when copied.
 //
 //     # Heading        **bold**   *italic*   ~~strike~~   `code`
 //     - item / 1. item / - [ ] task / - [x] done
@@ -25,6 +26,23 @@ enum Markdown {
     private static let headingScale: [CGFloat] = [1.5, 1.3, 1.15, 1.05, 1, 1]
     private static let markColor = NSColor.tertiaryLabelColor
     private static let codeColor = NSColor.systemPink
+    private static let quoteIndent: CGFloat = 14
+    private static let hiddenFont = NSFont.systemFont(ofSize: 0.01)
+
+    /// Marks syntax characters that are drawn invisibly; the value is a `HiddenKind` raw value.
+    static let hiddenKey = NSAttributedString.Key("QuotepadMarkdownHidden")
+
+    enum HiddenKind: String {
+        /// "## " or "> " at the start of a line: the caret never stops inside or before it.
+        case block
+        /// "**", "`" etc. around inline text: the caret may sit on either side.
+        case inline
+    }
+
+    struct HiddenRun {
+        let range: NSRange
+        let kind: HiddenKind
+    }
 
     private static func regex(_ pattern: String) -> NSRegularExpression {
         try! NSRegularExpression(pattern: pattern)
@@ -42,6 +60,7 @@ enum Markdown {
         storage.addAttributes(base, range: whole)
         storage.addAttribute(.paragraphStyle, value: NSParagraphStyle.default, range: whole)
         storage.removeAttribute(.strikethroughStyle, range: whole)
+        storage.removeAttribute(hiddenKey, range: whole)
 
         var inFence = false
         text.enumerateSubstrings(in: whole, options: [.byLines, .substringNotRequired]) { _, line, _, _ in
@@ -63,17 +82,15 @@ enum Markdown {
         var content = line // what's left for inline styling after the block marker
 
         if let m = match(heading, in: text, line) {
-            let level = m.range(at: 1).length
-            let size = (baseFont.pointSize * headingScale[level - 1]).rounded()
-            storage.addAttribute(.font, value: withTraits(baseFont.withSize(size), .bold), range: line)
-            storage.addAttribute(.foregroundColor, value: markColor, range: m.range)
+            storage.addAttributes(headingAttributes(level: m.range(at: 1).length, baseFont: baseFont), range: line)
+            hide(m.range, .block, in: storage)
             content = after(m.range, in: line)
         } else if match(rule, in: text, line) != nil {
             storage.addAttribute(.foregroundColor, value: markColor, range: line)
             return
         } else if let m = match(quote, in: text, line) {
-            storage.addAttribute(.foregroundColor, value: NSColor.secondaryLabelColor, range: line)
-            storage.addAttribute(.foregroundColor, value: markColor, range: m.range)
+            storage.addAttributes(quoteAttributes(baseFont: baseFont), range: line)
+            hide(m.range, .block, in: storage)
             content = after(m.range, in: line)
         } else if let m = match(task, in: text, line) {
             hangIndent(line, marker: m.range, in: storage, text: text, font: baseFont)
@@ -106,7 +123,7 @@ enum Markdown {
                 storage.addAttribute(.font, value: mono, range: sub)
             }
             storage.addAttribute(.foregroundColor, value: codeColor, range: m.range)
-            dimMarks(m.range, markLength: 1, in: storage)
+            hideMarks(m.range, markLength: 1, in: storage)
             taken.append(m.range)
         }
 
@@ -114,7 +131,7 @@ enum Markdown {
             for m in pattern.matches(in: text as String, range: range)
             where !taken.contains(where: { NSIntersectionRange($0, m.range).length > 0 }) {
                 apply(m.range)
-                dimMarks(m.range, markLength: markLength, in: storage)
+                hideMarks(m.range, markLength: markLength, in: storage)
             }
         }
         each(bold, markLength: 2) { addTraits(.bold, to: $0, in: storage) }
@@ -133,9 +150,38 @@ enum Markdown {
         NSRange(location: NSMaxRange(marker), length: NSMaxRange(line) - NSMaxRange(marker))
     }
 
-    private static func dimMarks(_ range: NSRange, markLength: Int, in storage: NSTextStorage) {
-        storage.addAttribute(.foregroundColor, value: markColor, range: NSRange(location: range.location, length: markLength))
-        storage.addAttribute(.foregroundColor, value: markColor, range: NSRange(location: NSMaxRange(range) - markLength, length: markLength))
+    /// Near-zero width and fully transparent. Later font changes (bold, slant) keep the tiny size.
+    private static func hide(_ range: NSRange, _ kind: HiddenKind, in storage: NSTextStorage) {
+        storage.addAttributes([
+            .font: hiddenFont,
+            .foregroundColor: NSColor.clear,
+            hiddenKey: kind.rawValue,
+        ], range: range)
+    }
+
+    private static func hideMarks(_ range: NSRange, markLength: Int, in storage: NSTextStorage) {
+        hide(NSRange(location: range.location, length: markLength), .inline, in: storage)
+        hide(NSRange(location: NSMaxRange(range) - markLength, length: markLength), .inline, in: storage)
+    }
+
+    private static func headingAttributes(level: Int, baseFont: NSFont) -> [NSAttributedString.Key: Any] {
+        let size = (baseFont.pointSize * headingScale[level - 1]).rounded()
+        let font = withTraits(baseFont.withSize(size), .bold)
+        return [.font: font, .paragraphStyle: lineHeightStyle(for: font)]
+    }
+
+    private static func quoteAttributes(baseFont: NSFont) -> [NSAttributedString.Key: Any] {
+        let style = lineHeightStyle(for: baseFont)
+        style.firstLineHeadIndent = quoteIndent
+        style.headIndent = quoteIndent
+        return [.foregroundColor: NSColor.secondaryLabelColor, .paragraphStyle: style]
+    }
+
+    /// Keeps a line holding only a hidden marker ("## ") from collapsing to the hidden font's height.
+    private static func lineHeightStyle(for font: NSFont) -> NSMutableParagraphStyle {
+        let style = NSMutableParagraphStyle()
+        style.minimumLineHeight = ceil(NSLayoutManager().defaultLineHeight(for: font))
+        return style
     }
 
     /// Wrapped lines of a list item line up with the item's text, not its marker.
@@ -167,6 +213,47 @@ enum Markdown {
     private static func withTraits(_ font: NSFont, _ traits: NSFontDescriptor.SymbolicTraits) -> NSFont {
         let descriptor = font.fontDescriptor.withSymbolicTraits(font.fontDescriptor.symbolicTraits.union(traits))
         return NSFont(descriptor: descriptor, size: font.pointSize) ?? font
+    }
+
+    // MARK: - Hidden marks
+
+    /// The hidden run the caret at `location` would be stuck in: strictly inside any run, or at the
+    /// start of a block marker (typing there would break the "## ").
+    static func hiddenRun(trapping location: Int, in storage: NSTextStorage) -> HiddenRun? {
+        guard let run = hiddenRun(at: location, in: storage) else { return nil }
+        return run.range.location < location || run.kind == .block ? run : nil
+    }
+
+    /// The hidden run right before the caret, if any.
+    static func hiddenRun(endingAt location: Int, in storage: NSTextStorage) -> HiddenRun? {
+        guard location > 0, let run = hiddenRun(at: location - 1, in: storage),
+              NSMaxRange(run.range) == location else { return nil }
+        return run
+    }
+
+    private static func hiddenRun(at location: Int, in storage: NSTextStorage) -> HiddenRun? {
+        guard location < storage.length else { return nil }
+        var range = NSRange()
+        let value = storage.attribute(hiddenKey, at: location, longestEffectiveRange: &range,
+                                      in: NSRange(location: 0, length: storage.length))
+        guard let raw = value as? String, let kind = HiddenKind(rawValue: raw) else { return nil }
+        return HiddenRun(range: range, kind: kind)
+    }
+
+    /// What newly typed text on the caret's line should look like before the next restyle: the
+    /// line's block look (heading, quote) without any inline style or hidden-mark attributes.
+    static func typingAttributes(at caret: Int, in text: NSString, base: [NSAttributedString.Key: Any]) -> [NSAttributedString.Key: Any] {
+        guard let baseFont = base[.font] as? NSFont else { return base }
+        var start = 0, contentsEnd = 0
+        text.getLineStart(&start, end: nil, contentsEnd: &contentsEnd, for: NSRange(location: min(caret, text.length), length: 0))
+        let line = NSRange(location: start, length: contentsEnd - start)
+        var attributes = base
+        if let m = match(heading, in: text, line) {
+            attributes.merge(headingAttributes(level: m.range(at: 1).length, baseFont: baseFont)) { $1 }
+        } else if match(quote, in: text, line) != nil {
+            attributes.merge(quoteAttributes(baseFont: baseFont)) { $1 }
+        }
+        return attributes
     }
 
     // MARK: - Return key in lists
@@ -221,3 +308,4 @@ enum Markdown {
 private extension NSFont {
     var isBold: Bool { fontDescriptor.symbolicTraits.contains(.bold) }
 }
+
