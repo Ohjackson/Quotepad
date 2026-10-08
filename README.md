@@ -27,7 +27,7 @@ Some notes don't deserve a Notes.app document: an email address you're about to 
 
 - **Global hotkey.** <kbd>⌘</kbd> <kbd>'</kbd> toggles the panel from any app, on any Space, even over full-screen apps.
 - **Tabs.** Keep several notes side by side. Tab titles come from each note's first line.
-- **Copyable code boxes.** Type `/code` and press <kbd>Return</kbd> to insert a one-line box for emails, API keys and shell commands. The box scrolls horizontally and has a one-click copy button. Smart quotes and autocorrect are off inside boxes, so what you copy is exactly what you typed.
+- **Copyable boxes.** Type `/p` and press <kbd>Return</kbd> for a one-line box for emails, API keys and shell commands, or `/code` for a multi-line code block that keeps indentation. Boxes scroll horizontally and have a one-click copy button. Smart quotes and autocorrect are off inside boxes, so what you copy is exactly what you typed.
 - **Survives crashes and power loss.** Notes are saved 1 second after you stop typing (at most 5 seconds during non-stop typing) using `F_FULLFSYNC` and an atomic rename, and are flushed on quit, sleep and shutdown.
 - **Make it yours.** Light/dark theme, seven background tints (sticky-note yellow included), background opacity, font size, and system, monospaced or serif fonts.
 - **Stays out of the way.** Lives in the menu bar, hides when you click elsewhere (optional), remembers its size and, optionally, its position.
@@ -70,11 +70,12 @@ To start Quotepad at login, open the gear menu in the panel (or the menu bar ico
 | <kbd>⌃</kbd> <kbd>Tab</kbd> / <kbd>⌃</kbd> <kbd>⇧</kbd> <kbd>Tab</kbd> | Next / previous tab |
 | <kbd>⌘</kbd> <kbd>,</kbd> | Settings |
 | <kbd>Esc</kbd> | Hide the panel |
-| `/code` <kbd>Return</kbd> | Insert a code box |
+| `/p` <kbd>Return</kbd> | Insert a one-line copy box |
+| `/code` <kbd>Return</kbd> | Insert a multi-line code block |
 
 Standard editing shortcuts (<kbd>⌘</kbd> <kbd>C</kbd>/<kbd>X</kbd>/<kbd>V</kbd>/<kbd>A</kbd>/<kbd>Z</kbd>, <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>Z</kbd>) work as usual. Shortcuts are matched by key position, so they keep working with non-Latin input sources such as Korean.
 
-Inside a code box, <kbd>Return</kbd> or <kbd>↓</kbd> moves to the line below, <kbd>↑</kbd> moves above, and <kbd>Delete</kbd> in an empty box removes it. Copying a selection that contains boxes puts Markdown fences on the clipboard, and pasting fenced text creates boxes.
+Inside a one-line box, <kbd>Return</kbd> or <kbd>↓</kbd> moves to the line below, <kbd>↑</kbd> moves above, and <kbd>Delete</kbd> in an empty box removes it. In a code block, <kbd>Return</kbd> starts a new line with the same indentation, <kbd>Tab</kbd> indents, and <kbd>↑</kbd> on the first line or <kbd>↓</kbd> on the last line leaves the block. Copying a selection that contains boxes puts Markdown fences on the clipboard (```` ``` ```` for one-line boxes, `~~~` for code blocks), and pasting fenced text creates boxes.
 
 Tabs close for good: there's no trash. Click the **×** on a tab, middle-click it, or press <kbd>⌘</kbd> <kbd>W</kbd>.
 
@@ -101,7 +102,8 @@ QUOTEPAD_DATA_DIR=/tmp/quotepad-dev ./.build/release/Quotepad
 | Path | Purpose |
 | --- | --- |
 | `Sources/Quotepad/AppDelegate.swift` | Panel, tabs, shortcuts, saving, global hotkey |
-| `Sources/Quotepad/CodeBlock.swift` | Code boxes (TextKit 2 view attachments) and the note ⇄ Markdown codec |
+| `Sources/Quotepad/CodeBlock.swift` | One-line boxes and code blocks (TextKit 2 view attachments) and the note ⇄ Markdown codec |
+| `Sources/Quotepad/Markdown.swift` | Live Markdown styling, hidden syntax marks, list continuation |
 | `Sources/Quotepad/TabBarView.swift` | Tab strip UI |
 | `Sources/Quotepad/DurableStore.swift` | Crash-safe file writes |
 | `Sources/Quotepad/Settings.swift` | Preferences, background tints, login item |

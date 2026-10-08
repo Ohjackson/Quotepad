@@ -531,8 +531,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     func textView(_ textView: NSTextView, doCommandBy selector: Selector) -> Bool {
         if selector == #selector(NSResponder.deleteBackward(_:)) { return deleteBackwardOverHiddenMarkdown() }
         guard selector == #selector(NSResponder.insertNewline(_:)) else { return false }
-        if let lineRange = codeTriggerLineRange() {
-            insertCodeBlock(replacing: lineRange)
+        if let (lineRange, kind) = codeTriggerLine() {
+            insertCodeBlock(kind, replacing: lineRange)
             return true
         }
         return continueMarkdownList()
@@ -552,8 +552,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         return true
     }
 
-    /// The caret's line content, if the whole line is a code-box trigger like "/code".
-    func codeTriggerLineRange() -> NSRange? {
+    /// The caret's line content, if the whole line is a box trigger like "/code" or "/p".
+    func codeTriggerLine() -> (NSRange, CodeBlockKind)? {
         let selection = textView.selectedRange()
         guard selection.length == 0, !textView.hasMarkedText() else { return nil }
         let text = textView.string as NSString
@@ -561,12 +561,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         text.getLineStart(&start, end: nil, contentsEnd: &contentsEnd, for: NSRange(location: selection.location, length: 0))
         let range = NSRange(location: start, length: contentsEnd - start)
         let line = text.substring(with: range).trimmingCharacters(in: .whitespaces).lowercased()
-        return NoteCodec.triggers.contains(line) ? range : nil
+        return NoteCodec.trigger(line).map { (range, $0) }
     }
 
-    func insertCodeBlock(replacing range: NSRange) {
+    func insertCodeBlock(_ kind: CodeBlockKind, replacing range: NSRange) {
         guard let storage = textView.textStorage else { return }
-        let attachment = CodeBlockAttachment(content: "")
+        let attachment = CodeBlockAttachment(content: "", kind: kind)
         attachment.host = self
         attachment.focusWhenLoaded = true
 
@@ -597,6 +597,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         commitCurrentText()
         refreshTabBar()
         scheduleSave()
+    }
+
+    func codeBlockDidResize(_ attachment: CodeBlockAttachment) {
+        guard let range = range(of: attachment),
+              let layoutManager = textView.textLayoutManager,
+              let contentManager = layoutManager.textContentManager,
+              let start = contentManager.location(contentManager.documentRange.location, offsetBy: range.location),
+              let end = contentManager.location(start, offsetBy: range.length),
+              let textRange = NSTextRange(location: start, end: end) else { return }
+        layoutManager.invalidateLayout(for: textRange)
+        layoutManager.textViewportLayoutController.layoutViewport()
     }
 
     func codeBlockRequestsExit(_ attachment: CodeBlockAttachment, after: Bool) {
@@ -696,7 +707,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     func tabTitle(for tab: NoteTab) -> String {
         for line in tab.text.split(whereSeparator: \.isNewline) {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
-            guard trimmed != NoteCodec.fence else { continue }
+            guard trimmed != NoteCodec.fence && trimmed != NoteCodec.codeFence else { continue }
             let title = Markdown.strippingHeading(trimmed)
             if !title.isEmpty {
                 return String(title.prefix(80))
