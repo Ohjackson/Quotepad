@@ -1,8 +1,8 @@
 import Cocoa
 
 // Live Markdown look for the note editor. Only attributes change, never the text: syntax marks
-// stay in the note but are drawn invisibly (list, rule and fence marks stay visible, dimmed),
-// so notes remain plain Markdown on disk and when copied.
+// stay in the note but are drawn invisibly (list and fence marks stay visible, dimmed; a "---"
+// line is drawn as a horizontal rule), so notes remain plain Markdown on disk and when copied.
 //
 //     # Heading        **bold**   *italic*   ~~strike~~   `code`
 //     - item / 1. item / - [ ] task / - [x] done
@@ -31,6 +31,8 @@ enum Markdown {
 
     /// Marks syntax characters that are drawn invisibly; the value is a `HiddenKind` raw value.
     static let hiddenKey = NSAttributedString.Key("QuotepadMarkdownHidden")
+    /// Marks a "---" line, drawn by `MarkdownLayoutDelegate` as a horizontal rule.
+    static let ruleKey = NSAttributedString.Key("QuotepadMarkdownRule")
 
     enum HiddenKind: String {
         /// "## " or "> " at the start of a line: the caret never stops inside or before it.
@@ -61,6 +63,7 @@ enum Markdown {
         storage.addAttribute(.paragraphStyle, value: NSParagraphStyle.default, range: whole)
         storage.removeAttribute(.strikethroughStyle, range: whole)
         storage.removeAttribute(hiddenKey, range: whole)
+        storage.removeAttribute(ruleKey, range: whole)
 
         var inFence = false
         text.enumerateSubstrings(in: whole, options: [.byLines, .substringNotRequired]) { _, line, _, _ in
@@ -86,7 +89,7 @@ enum Markdown {
             hide(m.range, .block, in: storage)
             content = after(m.range, in: line)
         } else if match(rule, in: text, line) != nil {
-            storage.addAttribute(.foregroundColor, value: markColor, range: line)
+            storage.addAttribute(ruleKey, value: true, range: line)
             return
         } else if let m = match(quote, in: text, line) {
             storage.addAttributes(quoteAttributes(baseFont: baseFont), range: line)
@@ -309,3 +312,39 @@ private extension NSFont {
     var isBold: Bool { fontDescriptor.symbolicTraits.contains(.bold) }
 }
 
+// MARK: - Horizontal rule
+
+/// Gives "---" lines a layout fragment that draws a rule instead of the dashes.
+final class MarkdownLayoutDelegate: NSObject, NSTextLayoutManagerDelegate {
+    func textLayoutManager(_ textLayoutManager: NSTextLayoutManager, textLayoutFragmentFor location: NSTextLocation,
+                           in textElement: NSTextElement) -> NSTextLayoutFragment {
+        if let paragraph = textElement as? NSTextParagraph, paragraph.attributedString.length > 0,
+           paragraph.attributedString.attribute(Markdown.ruleKey, at: 0, effectiveRange: nil) != nil {
+            return RuleLayoutFragment(textElement: textElement, range: textElement.elementRange)
+        }
+        return NSTextLayoutFragment(textElement: textElement, range: textElement.elementRange)
+    }
+}
+
+private final class RuleLayoutFragment: NSTextLayoutFragment {
+    // Keeps the line's normal height (and caret) but draws a rule across the container instead of the text.
+    override func draw(at point: CGPoint, in context: CGContext) {
+        let padding = textLayoutManager?.textContainer?.lineFragmentPadding ?? 5
+        let width = textLayoutManager?.textContainer?.size.width ?? layoutFragmentFrame.width
+        let lineHeight = textLineFragments.first?.typographicBounds.height ?? layoutFragmentFrame.height
+        let y = (point.y + lineHeight / 2).rounded() + 0.5
+        context.saveGState()
+        context.setStrokeColor(NSColor.separatorColor.cgColor)
+        context.setLineWidth(1)
+        // `point` is already past the left padding, so the rule lines up with the text.
+        context.move(to: CGPoint(x: point.x, y: y))
+        context.addLine(to: CGPoint(x: point.x + width - padding * 2, y: y))
+        context.strokePath()
+        context.restoreGState()
+    }
+
+    override var renderingSurfaceBounds: CGRect {
+        let width = textLayoutManager?.textContainer?.size.width ?? layoutFragmentFrame.width
+        return super.renderingSurfaceBounds.union(CGRect(x: 0, y: 0, width: width, height: layoutFragmentFrame.height))
+    }
+}

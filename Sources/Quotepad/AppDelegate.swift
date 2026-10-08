@@ -75,6 +75,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     var separator: SeparatorView!
     var scrollView: NSScrollView!
     var textView: NoteTextView!
+    let markdownLayoutDelegate = MarkdownLayoutDelegate()
     var hotKeyRef: EventHotKeyRef?
     var statusItem: NSStatusItem!
     var localMonitor: Any?
@@ -404,6 +405,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         textView.isRichText = false
         textView.allowsUndo = true
         textView.textContainerInset = NSSize(width: 5, height: 10)
+        textView.textLayoutManager?.delegate = markdownLayoutDelegate
         scrollView.documentView = textView
 
         layoutContent()
