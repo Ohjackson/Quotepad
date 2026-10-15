@@ -27,6 +27,7 @@ Some notes don't deserve a Notes.app document: an email address you're about to 
 
 - **Global hotkey.** <kbd>⌘</kbd> <kbd>'</kbd> toggles the panel from any app, on any Space, even over full-screen apps.
 - **Tabs.** Keep several notes side by side. Tab titles come from each note's first line.
+- **Markdown as you type.** Headings, bold, italic, strikethrough, inline code, lists, quotes, rules and tables render in place. The marks are hidden but stay in the text, so a note pasted from a chatbot or copied out of Quotepad is still plain Markdown.
 - **Copyable boxes.** Type `/p` and press <kbd>Return</kbd> for a one-line box for emails, API keys and shell commands, or `/code` for a multi-line code block that keeps indentation. Pick a language from the block's header (or type `/code python`) for VS Code-style syntax colors: Python, Java, JavaScript, TypeScript, Kotlin, Swift, C, C++, C#, Go, Rust, SQL, Shell, JSON and YAML. Boxes scroll horizontally and have a one-click copy button. Smart quotes and autocorrect are off inside boxes, so what you copy is exactly what you typed.
 - **Survives crashes and power loss.** Notes are saved 1 second after you stop typing (at most 5 seconds during non-stop typing) using `F_FULLFSYNC` and an atomic rename, and are flushed on quit, sleep and shutdown.
 - **Make it yours.** Light/dark theme, seven background tints (sticky-note yellow included), background opacity, font size, and system, monospaced or serif fonts.
@@ -103,7 +104,7 @@ QUOTEPAD_DATA_DIR=/tmp/quotepad-dev ./.build/release/Quotepad
 | --- | --- |
 | `Sources/Quotepad/AppDelegate.swift` | Panel, tabs, shortcuts, saving, global hotkey |
 | `Sources/Quotepad/CodeBlock.swift` | One-line boxes and code blocks (TextKit 2 view attachments) and the note ⇄ Markdown codec |
-| `Sources/Quotepad/Markdown.swift` | Live Markdown styling, hidden syntax marks, list continuation |
+| `Sources/Quotepad/Markdown.swift` | Live Markdown styling (hidden marks, tables, code chips, rules) and list continuation |
 | `Sources/Quotepad/SyntaxHighlighter.swift` | Syntax colors and language definitions for code blocks |
 | `Sources/Quotepad/TabBarView.swift` | Tab strip UI |
 | `Sources/Quotepad/DurableStore.swift` | Crash-safe file writes |

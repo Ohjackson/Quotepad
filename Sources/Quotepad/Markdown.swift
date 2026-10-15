@@ -2,11 +2,14 @@ import Cocoa
 
 // Live Markdown look for the note editor. Only attributes change, never the text: syntax marks
 // stay in the note but are drawn invisibly (list and fence marks stay visible, dimmed; a "---"
-// line is drawn as a horizontal rule), so notes remain plain Markdown on disk and when copied.
+// line is drawn as a horizontal rule, tables as aligned columns), so notes remain plain Markdown
+// on disk and when copied.
 //
 //     # Heading        **bold**   *italic*   ~~strike~~   `code`
 //     - item / 1. item / - [ ] task / - [x] done
 //     > quote          ---        ``` fenced lines ```
+//     | a | b |
+//     |---|---|        tables (rows must start with "|")
 
 enum Markdown {
     private static let heading = regex(#"^(#{1,6})[ \t]+"#)
@@ -16,6 +19,8 @@ enum Markdown {
     private static let task = regex(#"^([ \t]*)([-*+])[ \t]+(\[([ xX])\])[ \t]+"#)
     private static let list = regex(#"^([ \t]*)([-*+]|(\d{1,9})([.)]))[ \t]+"#)
     private static let fence = regex(#"^ {0,3}```"#)
+    private static let tableRow = regex(#"^[ \t]*\|"#)
+    private static let tableSeparator = regex(#"^[ \t]*\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)*\|?[ \t]*$"#)
 
     private static let code = regex(#"`[^`\n]+`"#)
     private static let bold = regex(#"(\*\*|__)(?=\S)(.+?)(?<=\S)\1"#)
@@ -28,21 +33,27 @@ enum Markdown {
     private static let quoteIndent: CGFloat = 14
     /// Room inside an inline code chip, on each side of its text.
     private static let codePadding: CGFloat = 3
+    /// Space between table columns.
+    private static let columnGap: CGFloat = 16
     private static let hiddenFont = NSFont.systemFont(ofSize: 0.01)
 
     /// Marks syntax characters that are drawn invisibly; the value is a `HiddenKind` raw value.
     static let hiddenKey = NSAttributedString.Key("QuotepadMarkdownHidden")
-    /// Marks a "---" line, drawn by `MarkdownLayoutDelegate` as a horizontal rule. The value is the
-    /// rule's width as an `NSNumber`; 0 spans the whole line.
+    /// Marks a line drawn by `MarkdownLayoutDelegate` as a horizontal rule ("---", or a table's
+    /// header separator). The value is the rule's width as an `NSNumber`; 0 spans the whole line.
     static let ruleKey = NSAttributedString.Key("QuotepadMarkdownRule")
     /// Marks inline code (backticks included); `MarkdownLayoutDelegate` draws a chip behind it.
     static let codeKey = NSAttributedString.Key("QuotepadMarkdownCode")
+    /// Marks a table row that gets a line under it; the value is the table width as an `NSNumber`.
+    static let rowBorderKey = NSAttributedString.Key("QuotepadMarkdownRowBorder")
 
     enum HiddenKind: String {
         /// "## " or "> " at the start of a line: the caret never stops inside or before it.
         case block
         /// "**", "`" etc. around inline text: the caret may sit on either side.
         case inline
+        /// A table's "|": the caret skips the one starting a row, and Backspace never deletes it.
+        case pipe
     }
 
     struct HiddenRun {
@@ -66,21 +77,32 @@ enum Markdown {
         storage.addAttributes(base, range: whole)
         storage.addAttribute(.paragraphStyle, value: NSParagraphStyle.default, range: whole)
         storage.removeAttribute(.strikethroughStyle, range: whole)
-        for key in [hiddenKey, ruleKey, codeKey, .kern] {
+        for key in [hiddenKey, ruleKey, codeKey, rowBorderKey, .kern] {
             storage.removeAttribute(key, range: whole)
         }
 
-        var inFence = false
+        var lines: [NSRange] = []
         text.enumerateSubstrings(in: whole, options: [.byLines, .substringNotRequired]) { _, line, _, _ in
+            lines.append(line)
+        }
+        var inFence = false
+        var index = 0
+        while index < lines.count {
+            let line = lines[index]
             let isFence = match(fence, in: text, line) != nil
             if isFence || inFence {
                 if isFence { inFence.toggle() }
                 let mono = NSFont.monospacedSystemFont(ofSize: baseFont.pointSize, weight: .regular)
                 storage.addAttribute(.font, value: mono, range: line)
                 if isFence { storage.addAttribute(.foregroundColor, value: markColor, range: line) }
-                return
+                index += 1
+            } else if let end = tableEnd(startingAt: index, in: lines, text: text) {
+                styleTable(Array(lines[index..<end]), in: storage, text: text)
+                index = end
+            } else {
+                styleLine(line, in: storage, text: text, baseFont: baseFont)
+                index += 1
             }
-            styleLine(line, in: storage, text: text, baseFont: baseFont)
         }
         storage.endEditing()
     }
@@ -149,6 +171,84 @@ enum Markdown {
         each(strike, markLength: 2) { storage.addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: $0) }
         each(italicStar, markLength: 1) { slant($0, in: storage) }
         each(italicUnderscore, markLength: 1) { slant($0, in: storage) }
+    }
+
+    // MARK: - Tables
+
+    /// A table needs a header row and a separator row; it runs until the first line that isn't a row.
+    private static func tableEnd(startingAt index: Int, in lines: [NSRange], text: NSString) -> Int? {
+        guard index + 1 < lines.count, match(tableRow, in: text, lines[index]) != nil,
+              text.substring(with: lines[index + 1]).contains("|"),
+              match(tableSeparator, in: text, lines[index + 1]) != nil else { return nil }
+        var end = index + 2
+        while end < lines.count, match(tableRow, in: text, lines[end]) != nil { end += 1 }
+        return end
+    }
+
+    /// Hides the pipes and lines the columns up by kerning the end of each cell to its column's width.
+    private static func styleTable(_ lines: [NSRange], in storage: NSTextStorage, text: NSString) {
+        let rows = [lines[0]] + lines.dropFirst(2)
+        let rowStyle = NSMutableParagraphStyle()
+        rowStyle.paragraphSpacingBefore = 3
+        rowStyle.paragraphSpacing = 3
+
+        var cellsByRow: [[NSRange]] = []
+        for (rowIndex, row) in rows.enumerated() {
+            let pipes = pipePositions(in: row, text: text)
+            var cells: [NSRange] = []
+            for (n, pipe) in pipes.enumerated() {
+                let end = n + 1 < pipes.count ? pipes[n + 1] : NSMaxRange(row)
+                if n + 1 == pipes.count && end == pipe + 1 { break } // nothing after the closing pipe
+                cells.append(NSRange(location: pipe + 1, length: end - pipe - 1))
+            }
+            storage.addAttribute(.paragraphStyle, value: rowStyle, range: row)
+            if rowIndex == 0 { addTraits(.bold, to: row, in: storage) }
+            for cell in cells { styleInline(cell, in: storage, text: text) }
+            for pipe in pipes { hide(NSRange(location: pipe, length: 1), .pipe, in: storage) }
+            cellsByRow.append(cells)
+        }
+
+        // Column widths, measured after the cells got their final fonts.
+        var widths: [CGFloat] = []
+        for cells in cellsByRow {
+            for (column, cell) in cells.enumerated() {
+                let width = ceil(storage.attributedSubstring(from: cell).size().width)
+                if column < widths.count { widths[column] = max(widths[column], width) } else { widths.append(width) }
+            }
+        }
+        for cells in cellsByRow {
+            for (column, cell) in cells.enumerated().dropLast() {
+                let width = ceil(storage.attributedSubstring(from: cell).size().width)
+                // An empty cell's last character is the pipe before it.
+                addKern(widths[column] + columnGap - width, at: NSMaxRange(cell) - 1, in: storage)
+            }
+        }
+        let tableWidth = NSNumber(value: Double(widths.reduce(0, +) + columnGap * CGFloat(max(0, widths.count - 1))))
+
+        // Header separator: drawn as a rule, its text hidden and its line kept short.
+        let separator = lines[1]
+        hide(separator, .block, in: storage)
+        let separatorStyle = NSMutableParagraphStyle()
+        separatorStyle.minimumLineHeight = 8
+        separatorStyle.maximumLineHeight = 8
+        storage.addAttributes([ruleKey: tableWidth, .paragraphStyle: separatorStyle], range: separator)
+        for row in rows.dropFirst().dropLast() {
+            storage.addAttribute(rowBorderKey, value: tableWidth, range: row)
+        }
+    }
+
+    /// Positions of the "|" that split cells: not escaped ("\|") and not inside `code`.
+    private static func pipePositions(in row: NSRange, text: NSString) -> [Int] {
+        var positions: [Int] = []
+        var inCode = false
+        for index in row.location..<NSMaxRange(row) {
+            switch text.character(at: index) {
+            case 0x60: inCode.toggle() // `
+            case 0x7C where !inCode && (index == 0 || text.character(at: index - 1) != 0x5C): positions.append(index) // | not after \
+            default: break
+            }
+        }
+        return positions
     }
 
     // MARK: - Helpers
@@ -237,7 +337,13 @@ enum Markdown {
     /// start of a block marker (typing there would break the "## ").
     static func hiddenRun(trapping location: Int, in storage: NSTextStorage) -> HiddenRun? {
         guard let run = hiddenRun(at: location, in: storage) else { return nil }
-        return run.range.location < location || run.kind == .block ? run : nil
+        switch run.kind {
+        case .block: return run
+        case .inline: return run.range.location < location ? run : nil
+        case .pipe: // only the pipe that starts a row
+            let lineStart = location == 0 || (storage.string as NSString).character(at: location - 1) == 0x0A
+            return lineStart ? run : nil
+        }
     }
 
     /// The hidden run right before the caret, if any.
@@ -341,7 +447,7 @@ private extension NSFont {
 
 // MARK: - Drawing
 
-/// Gives lines that need extra drawing (rules, code chips) their own layout fragment.
+/// Gives lines that need extra drawing (rules, code chips, table row lines) their own layout fragment.
 final class MarkdownLayoutDelegate: NSObject, NSTextLayoutManagerDelegate {
     func textLayoutManager(_ textLayoutManager: NSTextLayoutManager, textLayoutFragmentFor location: NSTextLocation,
                            in textElement: NSTextElement) -> NSTextLayoutFragment {
@@ -355,7 +461,8 @@ final class MarkdownLayoutDelegate: NSObject, NSTextLayoutManagerDelegate {
 private final class MarkdownLayoutFragment: NSTextLayoutFragment {
     static func needsDrawing(_ string: NSAttributedString) -> Bool {
         guard string.length > 0 else { return false }
-        if string.attribute(Markdown.ruleKey, at: 0, effectiveRange: nil) != nil { return true }
+        if string.attribute(Markdown.ruleKey, at: 0, effectiveRange: nil) != nil
+            || string.attribute(Markdown.rowBorderKey, at: 0, effectiveRange: nil) != nil { return true }
         var hasCode = false
         string.enumerateAttribute(Markdown.codeKey, in: NSRange(location: 0, length: string.length)) { value, _, stop in
             if value != nil { hasCode = true; stop.pointee = true }
@@ -386,6 +493,9 @@ private final class MarkdownLayoutFragment: NSTextLayoutFragment {
         }
         drawCodeChips(string, at: point, in: context)
         super.draw(at: point, in: context)
+        if let border = width(Markdown.rowBorderKey, in: string) {
+            strokeLine(at: point.y + layoutFragmentFrame.height - 1, from: point.x, width: border, in: context)
+        }
     }
 
     private func drawCodeChips(_ string: NSAttributedString, at point: CGPoint, in context: CGContext) {

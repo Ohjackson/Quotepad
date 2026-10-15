@@ -272,7 +272,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
               let run = Markdown.hiddenRun(trapping: newRange.location, in: storage) else { return newRange }
         let start = run.range.location, end = NSMaxRange(run.range)
         switch run.kind {
-        case .block:
+        case .block, .pipe:
             // ← from the start of a heading's text goes on to the previous line.
             let leftFromText = oldRange.length == 0 && oldRange.location == end && newRange.location < end
             return NSRange(location: leftFromText && start > 0 ? start - 1 : end, length: 0)
@@ -292,6 +292,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
             run = previous
         }
         switch run.kind {
+        case .pipe:
+            return true // at the start of a table cell: keep the table intact
         case .block:
             textView.insertText("", replacementRange: run.range)
             return true
