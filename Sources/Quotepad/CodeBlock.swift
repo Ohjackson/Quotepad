@@ -4,7 +4,9 @@ import Cocoa
 // Markdown fences, so notes stay plain text. Two kinds:
 //
 //  - Snippet (`/p`): one line for emails, keys, commands.
-//  - Code (`/code`, `/code python`): multi-line code with syntax coloring for the chosen language.
+//  - Code (`/code`): multi-line code with syntax coloring for the language picked in its header.
+//
+// Typing a trigger and then Space (or Return) turns the line into the box.
 //
 //     ```                                                   ~~~python
 //     someone@example.com                                   def hello():
@@ -394,15 +396,10 @@ enum NoteCodec {
     static let snippetTriggers: Set<String> = ["/p", "/ㅔ"]
     static let codeTriggers: Set<String> = ["/code", "/코드", "/챙ㄷ"]
 
-    /// The box a trigger line asks for. `/code python` (any language name or alias) also picks the language.
-    static func trigger(_ line: String) -> (CodeBlockKind, language: String?)? {
-        if snippetTriggers.contains(line) { return (.snippet, nil) }
-        if codeTriggers.contains(line) { return (.code, nil) }
-        let parts = line.split(separator: " ", maxSplits: 1).map(String.init)
-        if parts.count == 2, codeTriggers.contains(parts[0]),
-           let language = CodeLanguage.find(parts[1].trimmingCharacters(in: .whitespaces)) {
-            return (.code, language.id)
-        }
+    /// The box a trigger line asks for.
+    static func trigger(_ line: String) -> CodeBlockKind? {
+        if snippetTriggers.contains(line) { return .snippet }
+        if codeTriggers.contains(line) { return .code }
         return nil
     }
 
@@ -473,6 +470,14 @@ enum NoteCodec {
 /// Main note editor: copy/cut write code boxes as Markdown fences, and pasting fences makes boxes.
 final class NoteTextView: NSTextView {
     weak var codeBlockHost: CodeBlockHost?
+    /// Called for a typed space; returns true when it completed a trigger like "/code" and was used up.
+    var spaceHandler: (() -> Bool)?
+
+    override func insertText(_ string: Any, replacementRange: NSRange) {
+        let text = (string as? String) ?? (string as? NSAttributedString)?.string
+        if text == " ", !hasMarkedText(), spaceHandler?() == true { return }
+        super.insertText(string, replacementRange: replacementRange)
+    }
 
     override func writeSelection(to pboard: NSPasteboard, types: [NSPasteboard.PasteboardType]) -> Bool {
         guard let storage = textStorage, selectedRange().length > 0 else {
