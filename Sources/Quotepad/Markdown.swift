@@ -25,14 +25,18 @@ enum Markdown {
 
     private static let headingScale: [CGFloat] = [1.5, 1.3, 1.15, 1.05, 1, 1]
     private static let markColor = NSColor.tertiaryLabelColor
-    private static let codeColor = NSColor.systemPink
     private static let quoteIndent: CGFloat = 14
+    /// Room inside an inline code chip, on each side of its text.
+    private static let codePadding: CGFloat = 3
     private static let hiddenFont = NSFont.systemFont(ofSize: 0.01)
 
     /// Marks syntax characters that are drawn invisibly; the value is a `HiddenKind` raw value.
     static let hiddenKey = NSAttributedString.Key("QuotepadMarkdownHidden")
-    /// Marks a "---" line, drawn by `MarkdownLayoutDelegate` as a horizontal rule.
+    /// Marks a "---" line, drawn by `MarkdownLayoutDelegate` as a horizontal rule. The value is the
+    /// rule's width as an `NSNumber`; 0 spans the whole line.
     static let ruleKey = NSAttributedString.Key("QuotepadMarkdownRule")
+    /// Marks inline code (backticks included); `MarkdownLayoutDelegate` draws a chip behind it.
+    static let codeKey = NSAttributedString.Key("QuotepadMarkdownCode")
 
     enum HiddenKind: String {
         /// "## " or "> " at the start of a line: the caret never stops inside or before it.
@@ -62,8 +66,9 @@ enum Markdown {
         storage.addAttributes(base, range: whole)
         storage.addAttribute(.paragraphStyle, value: NSParagraphStyle.default, range: whole)
         storage.removeAttribute(.strikethroughStyle, range: whole)
-        storage.removeAttribute(hiddenKey, range: whole)
-        storage.removeAttribute(ruleKey, range: whole)
+        for key in [hiddenKey, ruleKey, codeKey, .kern] {
+            storage.removeAttribute(key, range: whole)
+        }
 
         var inFence = false
         text.enumerateSubstrings(in: whole, options: [.byLines, .substringNotRequired]) { _, line, _, _ in
@@ -89,7 +94,7 @@ enum Markdown {
             hide(m.range, .block, in: storage)
             content = after(m.range, in: line)
         } else if match(rule, in: text, line) != nil {
-            storage.addAttribute(ruleKey, value: true, range: line)
+            storage.addAttribute(ruleKey, value: NSNumber(value: 0), range: line)
             return
         } else if let m = match(quote, in: text, line) {
             storage.addAttributes(quoteAttributes(baseFont: baseFont), range: line)
@@ -125,8 +130,11 @@ enum Markdown {
                 let mono = NSFont.monospacedSystemFont(ofSize: font.pointSize, weight: font.isBold ? .bold : .regular)
                 storage.addAttribute(.font, value: mono, range: sub)
             }
-            storage.addAttribute(.foregroundColor, value: codeColor, range: m.range)
+            storage.addAttribute(codeKey, value: true, range: m.range)
             hideMarks(m.range, markLength: 1, in: storage)
+            // The chip runs from the opening to the closing backtick; kerning opens room inside it.
+            addKern(codePadding, at: m.range.location, in: storage)
+            addKern(codePadding, at: NSMaxRange(m.range) - 2, in: storage)
             taken.append(m.range)
         }
 
@@ -144,6 +152,11 @@ enum Markdown {
     }
 
     // MARK: - Helpers
+
+    private static func addKern(_ amount: CGFloat, at index: Int, in storage: NSTextStorage) {
+        let current = (storage.attribute(.kern, at: index, effectiveRange: nil) as? NSNumber)?.doubleValue ?? 0
+        storage.addAttribute(.kern, value: NSNumber(value: current + Double(amount)), range: NSRange(location: index, length: 1))
+    }
 
     private static func match(_ pattern: NSRegularExpression, in text: NSString, _ line: NSRange) -> NSTextCheckingResult? {
         pattern.firstMatch(in: text as String, options: [.anchored], range: line)
@@ -326,33 +339,82 @@ private extension NSFont {
     var isBold: Bool { fontDescriptor.symbolicTraits.contains(.bold) }
 }
 
-// MARK: - Horizontal rule
+// MARK: - Drawing
 
-/// Gives "---" lines a layout fragment that draws a rule instead of the dashes.
+/// Gives lines that need extra drawing (rules, code chips) their own layout fragment.
 final class MarkdownLayoutDelegate: NSObject, NSTextLayoutManagerDelegate {
     func textLayoutManager(_ textLayoutManager: NSTextLayoutManager, textLayoutFragmentFor location: NSTextLocation,
                            in textElement: NSTextElement) -> NSTextLayoutFragment {
-        if let paragraph = textElement as? NSTextParagraph, paragraph.attributedString.length > 0,
-           paragraph.attributedString.attribute(Markdown.ruleKey, at: 0, effectiveRange: nil) != nil {
-            return RuleLayoutFragment(textElement: textElement, range: textElement.elementRange)
+        if let paragraph = textElement as? NSTextParagraph, MarkdownLayoutFragment.needsDrawing(paragraph.attributedString) {
+            return MarkdownLayoutFragment(textElement: textElement, range: textElement.elementRange)
         }
         return NSTextLayoutFragment(textElement: textElement, range: textElement.elementRange)
     }
 }
 
-private final class RuleLayoutFragment: NSTextLayoutFragment {
-    // Keeps the line's normal height (and caret) but draws a rule across the container instead of the text.
-    override func draw(at point: CGPoint, in context: CGContext) {
+private final class MarkdownLayoutFragment: NSTextLayoutFragment {
+    static func needsDrawing(_ string: NSAttributedString) -> Bool {
+        guard string.length > 0 else { return false }
+        if string.attribute(Markdown.ruleKey, at: 0, effectiveRange: nil) != nil { return true }
+        var hasCode = false
+        string.enumerateAttribute(Markdown.codeKey, in: NSRange(location: 0, length: string.length)) { value, _, stop in
+            if value != nil { hasCode = true; stop.pointee = true }
+        }
+        return hasCode
+    }
+
+    private var string: NSAttributedString? { (textElement as? NSTextParagraph)?.attributedString }
+
+    /// The text width of the container; `point.x` in `draw` is already past the left padding.
+    private var lineWidth: CGFloat {
         let padding = textLayoutManager?.textContainer?.lineFragmentPadding ?? 5
-        let width = textLayoutManager?.textContainer?.size.width ?? layoutFragmentFrame.width
-        let lineHeight = textLineFragments.first?.typographicBounds.height ?? layoutFragmentFrame.height
-        let y = (point.y + lineHeight / 2).rounded() + 0.5
+        return (textLayoutManager?.textContainer?.size.width ?? layoutFragmentFrame.width) - padding * 2
+    }
+
+    private func width(_ key: NSAttributedString.Key, in string: NSAttributedString) -> CGFloat? {
+        guard let number = string.attribute(key, at: 0, effectiveRange: nil) as? NSNumber else { return nil }
+        return number.doubleValue > 0 ? min(CGFloat(number.doubleValue), lineWidth) : lineWidth
+    }
+
+    override func draw(at point: CGPoint, in context: CGContext) {
+        guard let string, string.length > 0 else { return super.draw(at: point, in: context) }
+        if let rule = width(Markdown.ruleKey, in: string) {
+            // Keeps the line's height (and caret) but draws a rule instead of the text.
+            let lineHeight = textLineFragments.first?.typographicBounds.height ?? layoutFragmentFrame.height
+            strokeLine(at: point.y + lineHeight / 2, from: point.x, width: rule, in: context)
+            return
+        }
+        drawCodeChips(string, at: point, in: context)
+        super.draw(at: point, in: context)
+    }
+
+    private func drawCodeChips(_ string: NSAttributedString, at point: CGPoint, in context: CGContext) {
+        context.saveGState()
+        context.setFillColor(NSColor.labelColor.withAlphaComponent(0.1).cgColor)
+        string.enumerateAttribute(Markdown.codeKey, in: NSRange(location: 0, length: string.length)) { value, range, _ in
+            guard value != nil else { return }
+            for line in textLineFragments {
+                let part = NSIntersectionRange(range, line.characterRange)
+                guard part.length > 0 else { continue }
+                let start = line.locationForCharacter(at: part.location).x
+                let end = line.locationForCharacter(at: NSMaxRange(part)).x
+                let bounds = line.typographicBounds
+                let rect = CGRect(x: point.x + bounds.minX + start, y: point.y + bounds.minY + 1,
+                                  width: end - start, height: bounds.height - 2)
+                context.addPath(CGPath(roundedRect: rect, cornerWidth: 4, cornerHeight: 4, transform: nil))
+            }
+        }
+        context.fillPath()
+        context.restoreGState()
+    }
+
+    private func strokeLine(at y: CGFloat, from x: CGFloat, width: CGFloat, in context: CGContext) {
+        let y = y.rounded() + 0.5
         context.saveGState()
         context.setStrokeColor(NSColor.separatorColor.cgColor)
         context.setLineWidth(1)
-        // `point` is already past the left padding, so the rule lines up with the text.
-        context.move(to: CGPoint(x: point.x, y: y))
-        context.addLine(to: CGPoint(x: point.x + width - padding * 2, y: y))
+        context.move(to: CGPoint(x: x, y: y))
+        context.addLine(to: CGPoint(x: x + width, y: y))
         context.strokePath()
         context.restoreGState()
     }
