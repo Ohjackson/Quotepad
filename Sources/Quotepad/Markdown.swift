@@ -300,11 +300,25 @@ enum Markdown {
         return .next(next)
     }
 
-    /// The text of a heading line without its leading "#"s, for tab titles.
-    static func strippingHeading(_ line: String) -> String {
+    private static let titleMarks: [(NSRegularExpression, String)] = [
+        (regex(#"`([^`\n]+)`"#), "$1"),
+        (bold, "$2"),
+        (strike, "$1"),
+        (italicStar, "$1"),
+        (italicUnderscore, "$1"),
+    ]
+
+    /// A line as a tab title: without heading "#"s and inline marks (`code`, **bold**, ...).
+    static func plainTitle(_ line: String) -> String {
+        var title = line
         let ns = line as NSString
-        guard let m = match(titleHeading, in: ns, NSRange(location: 0, length: ns.length)) else { return line }
-        return ns.substring(from: NSMaxRange(m.range))
+        if let m = match(titleHeading, in: ns, NSRange(location: 0, length: ns.length)) {
+            title = ns.substring(from: NSMaxRange(m.range))
+        }
+        for (pattern, template) in titleMarks {
+            title = pattern.stringByReplacingMatches(in: title, range: NSRange(location: 0, length: (title as NSString).length), withTemplate: template)
+        }
+        return title
     }
 }
 

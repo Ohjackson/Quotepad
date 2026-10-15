@@ -708,7 +708,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         for line in tab.text.split(whereSeparator: \.isNewline) {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             guard trimmed != NoteCodec.fence && NoteCodec.codeFenceLanguage(trimmed) == nil else { continue }
-            let title = Markdown.strippingHeading(trimmed)
+            let title = Markdown.plainTitle(trimmed)
             if !title.isEmpty {
                 return String(title.prefix(80))
             }
