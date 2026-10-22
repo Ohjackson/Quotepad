@@ -200,7 +200,7 @@ final class CodeBlockView: NSView, NSTextViewDelegate {
             languageMenu.isBordered = false
             languageMenu.controlSize = .small
             languageMenu.font = .systemFont(ofSize: 11)
-            languageMenu.addItem(withTitle: "텍스트")
+            languageMenu.addItem(withTitle: "Text")
             for language in CodeLanguage.all {
                 languageMenu.addItem(withTitle: language.name)
                 languageMenu.lastItem?.representedObject = language.id

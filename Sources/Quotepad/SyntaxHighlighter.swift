@@ -22,7 +22,8 @@ struct CodeLanguage {
     var keys = false
     var caseInsensitive = false
 
-    static let all: [CodeLanguage] = [python, java, javascript, typescript, kotlin, swift, c, cpp, csharp, go, rust, sql, shell, json, yaml]
+    /// Menu order: the most common first.
+    static let all: [CodeLanguage] = [c, java, python, swift, cpp, csharp, javascript, typescript, kotlin, go, rust, sql, shell, json, yaml]
 
     static func find(_ name: String) -> CodeLanguage? {
         let name = name.lowercased()
