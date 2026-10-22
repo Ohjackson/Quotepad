@@ -109,7 +109,7 @@ final class SettingsViewController: NSViewController {
         }
 
         let shortcuts = NSTextField(wrappingLabelWithString:
-            "⌘' 열기/닫기 · ⌘T 새 탭 · ⌘W 탭 닫기 · ⌃Tab 탭 이동\n/code 코드 블록 · /p 복사 박스 · ⌘, 설정 · Esc 숨기기")
+            "⌘' 열기/닫기 · ⌘T 새 탭 · ⌘W 탭 닫기 · ⌃Tab 탭 이동\n/code 코드 블록 · /p 복사 박스 · /help 도움말 · ⌘, 설정 · Esc 숨기기")
         shortcuts.font = .systemFont(ofSize: 11)
         shortcuts.textColor = .tertiaryLabelColor
 

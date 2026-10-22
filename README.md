@@ -73,6 +73,7 @@ To start Quotepad at login, open the gear menu in the panel (or the menu bar ico
 | <kbd>Esc</kbd> | Hide the panel |
 | `/p` <kbd>Space</kbd> | Insert a one-line copy box (<kbd>Return</kbd> works too) |
 | `/code` <kbd>Space</kbd> | Insert a multi-line code block (<kbd>Return</kbd> works too) |
+| `/help` <kbd>Space</kbd> | Show commands, Markdown syntax and shortcuts |
 
 Standard editing shortcuts (<kbd>⌘</kbd> <kbd>C</kbd>/<kbd>X</kbd>/<kbd>V</kbd>/<kbd>A</kbd>/<kbd>Z</kbd>, <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>Z</kbd>) work as usual. Shortcuts are matched by key position, so they keep working with non-Latin input sources such as Korean.
 
@@ -110,6 +111,7 @@ QUOTEPAD_DATA_DIR=/tmp/quotepad-dev ./.build/release/Quotepad
 | `Sources/Quotepad/DurableStore.swift` | Crash-safe file writes |
 | `Sources/Quotepad/Settings.swift` | Preferences, background tints, login item |
 | `Sources/Quotepad/SettingsViewController.swift` | Settings popover |
+| `Sources/Quotepad/HelpPopover.swift` | The `/help` card |
 | `scripts/build-app.sh` | Builds the `.app` bundle; `--install` copies it to `/Applications` |
 | `scripts/make-dmg.sh` | Builds a drag-to-install `.dmg` for releases |
 | `scripts/make-icon.swift` | Regenerates `Resources/AppIcon.icns` and `docs/icon.png` |

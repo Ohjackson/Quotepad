@@ -71,6 +71,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         popover.delegate = self
         return popover
     }()
+    lazy var helpPopover: NSPopover = {
+        let popover = NSPopover()
+        popover.behavior = .transient
+        popover.contentViewController = HelpViewController()
+        popover.delegate = self
+        return popover
+    }()
     var tabBar: TabBarView!
     var separator: SeparatorView!
     var scrollView: NSScrollView!
@@ -402,7 +409,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         textView.textContainer?.widthTracksTextView = true
         textView.delegate = self
         textView.codeBlockHost = self
-        textView.spaceHandler = { [weak self] in self?.insertCodeBlockFromTrigger(atLineEnd: true) ?? false }
+        textView.spaceHandler = { [weak self] in self?.runSlashCommand(atLineEnd: true) ?? false }
         textView.textColor = .labelColor
         textView.drawsBackground = false
         textView.isRichText = false
@@ -508,6 +515,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     func hideOverlay() {
         guard panel.isVisible else { return }
         if settingsPopover.isShown { settingsPopover.close() }
+        if helpPopover.isShown { helpPopover.close() }
         commitCurrentText()
         persistState()
         panel.orderOut(nil)
@@ -517,7 +525,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         guard Settings.shared.hideOnFocusLoss else { return }
         // Deferred: the settings popover taking key status must not count as "clicked away".
         DispatchQueue.main.async { [weak self] in
-            guard let self, self.panel.isVisible, !self.settingsPopover.isShown, NSApp.keyWindow == nil else { return }
+            guard let self, self.panel.isVisible, !self.settingsPopover.isShown, !self.helpPopover.isShown,
+                  NSApp.keyWindow == nil else { return }
             self.hideOverlay()
         }
     }
@@ -534,7 +543,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     func textView(_ textView: NSTextView, doCommandBy selector: Selector) -> Bool {
         if selector == #selector(NSResponder.deleteBackward(_:)) { return deleteBackwardOverHiddenMarkdown() }
         guard selector == #selector(NSResponder.insertNewline(_:)) else { return false }
-        return insertCodeBlockFromTrigger(atLineEnd: false) || continueMarkdownList()
+        return runSlashCommand(atLineEnd: false) || continueMarkdownList()
     }
 
     /// Return on a list/quote line starts the next item; on an empty item it ends the list.
@@ -552,23 +561,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     }
 
     /// Space (only right after the trigger, like Notion) or Return on a "/code" or "/p" line makes the box.
-    func insertCodeBlockFromTrigger(atLineEnd: Bool) -> Bool {
-        guard let (lineRange, kind) = codeTriggerLine(),
+    /// `/code`, `/p` and `/help`. With Space it only counts right after the command, like Notion.
+    func runSlashCommand(atLineEnd: Bool) -> Bool {
+        guard let (lineRange, line) = caretLine(),
               !atLineEnd || textView.selectedRange().location == NSMaxRange(lineRange) else { return false }
+        if NoteCodec.helpTriggers.contains(line) {
+            if textView.shouldChangeText(in: lineRange, replacementString: "") {
+                textView.textStorage?.replaceCharacters(in: lineRange, with: "")
+                textView.didChangeText()
+            }
+            showHelp()
+            return true
+        }
+        guard let kind = NoteCodec.trigger(line) else { return false }
         insertCodeBlock(kind, replacing: lineRange)
         return true
     }
 
-    /// The caret's line content, if the whole line is a box trigger like "/code" or "/p".
-    func codeTriggerLine() -> (NSRange, CodeBlockKind)? {
+    /// The help card, under the caret.
+    func showHelp() {
+        if settingsPopover.isShown { settingsPopover.close() }
+        var anchor = NSRect(x: textView.textContainerInset.width, y: textView.textContainerInset.height, width: 1, height: 16)
+        if let window = textView.window {
+            let screenRect = textView.firstRect(forCharacterRange: textView.selectedRange(), actualRange: nil)
+            if screenRect != .zero {
+                anchor = textView.convert(window.convertFromScreen(screenRect), from: nil)
+                anchor.size.width = max(anchor.width, 1)
+            }
+        }
+        helpPopover.appearance = panel.appearance
+        helpPopover.show(relativeTo: anchor, of: textView, preferredEdge: .maxY)
+    }
+
+    /// The caret's line, trimmed and lowercased, when nothing is selected or being composed.
+    func caretLine() -> (NSRange, String)? {
         let selection = textView.selectedRange()
         guard selection.length == 0, !textView.hasMarkedText() else { return nil }
         let text = textView.string as NSString
         var start = 0, contentsEnd = 0
         text.getLineStart(&start, end: nil, contentsEnd: &contentsEnd, for: NSRange(location: selection.location, length: 0))
         let range = NSRange(location: start, length: contentsEnd - start)
-        let line = text.substring(with: range).trimmingCharacters(in: .whitespaces).lowercased()
-        return NoteCodec.trigger(line).map { (range, $0) }
+        return (range, text.substring(with: range).trimmingCharacters(in: .whitespaces).lowercased())
     }
 
     func insertCodeBlock(_ kind: CodeBlockKind, replacing range: NSRange) {
@@ -666,6 +699,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
 
         if key == kVK_Escape && flags.isEmpty {
             if focusedText?.hasMarkedText() == true { return false } // let the IME cancel composition first
+            if helpPopover.isShown { helpPopover.close(); return true } // Esc closes the help card first
             hideOverlay()
             return true
         }
