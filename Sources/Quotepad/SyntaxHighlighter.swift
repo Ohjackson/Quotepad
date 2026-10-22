@@ -24,6 +24,8 @@ struct CodeLanguage {
 
     /// Menu order: the most common first.
     static let all: [CodeLanguage] = [c, java, python, swift, cpp, csharp, javascript, typescript, kotlin, go, rust, sql, shell, json, yaml]
+    /// Stored as `~~~text` when "Text" is picked on purpose, which turns detection off for that block.
+    static let plainTextID = "text"
 
     static func find(_ name: String) -> CodeLanguage? {
         let name = name.lowercased()
@@ -145,6 +147,75 @@ enum SyntaxHighlighter {
             }
         }
     }
+}
+
+// MARK: - Detection
+
+/// Guesses a code block's language from telltale patterns, cheaply: only the first 2,000
+/// characters, one pass per pattern, and no guess unless the evidence adds up.
+enum LanguageDetector {
+    private static let sampleLength = 2000
+    private static let minimumScore = 3
+
+    static func detect(_ code: String) -> CodeLanguage? {
+        let sample = String(code.prefix(sampleLength))
+        let trimmed = sample.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= 4 else { return nil }
+        if (trimmed.hasPrefix("{") || trimmed.hasPrefix("[")), code.count <= sampleLength,
+           let data = trimmed.data(using: .utf8), (try? JSONSerialization.jsonObject(with: data)) != nil {
+            return .json
+        }
+
+        let range = NSRange(location: 0, length: (sample as NSString).length)
+        var best: (language: CodeLanguage, score: Int)?
+        for (language, signals) in signals {
+            var score = 0
+            for (pattern, weight) in signals where pattern.firstMatch(in: sample, range: range) != nil {
+                score += weight
+            }
+            if score >= minimumScore, score > (best?.score ?? 0) { best = (language, score) }
+        }
+        return best?.language
+    }
+
+    private static func r(_ pattern: String) -> NSRegularExpression {
+        try! NSRegularExpression(pattern: pattern, options: [.anchorsMatchLines])
+    }
+
+    /// Weighted patterns per language; 3+ points (one strong sign, or a few weak ones) is a match.
+    /// Order breaks ties: more specific languages (C++ over C, TypeScript over JavaScript) come first.
+    private static let signals: [(CodeLanguage, [(NSRegularExpression, Int)])] = [
+        (.cpp, [(r(#"\bstd::"#), 3), (r(#"#include\s*<(iostream|vector|string|map|memory)>"#), 3), (r(#"\b(cout|cin)\s*(<<|>>)"#), 2),
+                (r(#"\btemplate\s*<"#), 3), (r(#"\bnamespace\s+\w+"#), 1), (r(#"\bclass\s+\w+\s*(:\s*public|\{)"#), 1)]),
+        (.c, [(r(#"^\s*#include\s*[<"]"#), 3), (r(#"\bint\s+main\s*\("#), 2), (r(#"\bprintf\s*\("#), 2),
+              (r(#"\b(malloc|free|sizeof)\s*\("#), 2), (r(#"\b(struct|typedef)\b"#), 1)]),
+        (.csharp, [(r(#"^\s*using\s+System"#), 3), (r(#"\bConsole\.Write(Line)?\s*\("#), 3), (r(#"\{\s*get;\s*(set;)?\s*\}"#), 3),
+                   (r(#"\bnamespace\s+[\w.]+"#), 1), (r(#"\b(public|private)\s+(async\s+)?(static\s+)?\w+\s+\w+\s*\("#), 1)]),
+        (.java, [(r(#"\bSystem\.out\.print"#), 3), (r(#"\bpublic\s+(static\s+)?(final\s+)?(class|interface|void)\b"#), 2),
+                 (r(#"^\s*import\s+java\."#), 3), (r(#"\bString\[\]"#), 2), (r(#"@Override\b"#), 2), (r(#"\bnew\s+\w+(<.*>)?\("#), 1)]),
+        (.kotlin, [(r(#"\bfun\s+\w+\s*\("#), 3), (r(#"\bval\s+\w+"#), 1), (r(#"\bprintln\s*\("#), 1),
+                   (r(#"\b(data|sealed)\s+class\b"#), 2)]),
+        (.swift, [(r(#"\bfunc\s+\w+\s*[(<]"#), 3), (r(#"^\s*import\s+(Foundation|SwiftUI|UIKit|Cocoa|AppKit)\b"#), 3),
+                  (r(#"\b(guard|if)\s+let\b"#), 2), (r(#"\blet\s+\w+\s*(:\s*\w+)?\s*="#), 1), (r(#"\bvar\s+\w+\s*:\s*\w+"#), 1),
+                  (r(#"@(State|Published|objc|main)\b"#), 2)]),
+        (.go, [(r(#"^package\s+\w+"#), 3), (r(#"\bfunc\s+(\(\w+\s+\*?\w+\)\s*)?\w+\s*\(.*\)\s*[\w*\[\]]*\s*\{"#), 2),
+               (r(#":="#), 1), (r(#"\bfmt\.\w+"#), 3), (r(#"\bfunc\s+main\s*\(\)"#), 1)]),
+        (.rust, [(r(#"\bfn\s+\w+\s*[(<]"#), 3), (r(#"\blet\s+mut\b"#), 3), (r(#"\b\w+!\s*\("#), 1),
+                 (r(#"\bimpl\b"#), 2), (r(#"^\s*use\s+\w+::"#), 3), (r(#"&(mut\s+)?self\b"#), 2)]),
+        (.typescript, [(r(#"\b(interface|type)\s+\w+\s*(=|\{)"#), 2), (r(#"[\w)]\s*:\s*(string|number|boolean|any|void)\b"#), 3),
+                       (r(#"\b(const|let)\s+\w+\s*:\s*\w+"#), 2), (r(#"\bimport\s+.*\s+from\s+['"]"#), 1)]),
+        (.javascript, [(r(#"\bconsole\.log\s*\("#), 3), (r(#"\b(const|let)\s+\w+\s*="#), 1), (r(#"=>"#), 1),
+                       (r(#"\bfunction\s*\w*\s*\("#), 2), (r(#"\brequire\s*\(|\bmodule\.exports\b"#), 3),
+                       (r(#"\b(document|window)\.\w+"#), 2), (r(#"\bimport\s+.*\s+from\s+['"]"#), 1)]),
+        (.python, [(r(#"^\s*def\s+\w+\s*\(.*\)\s*(->\s*[\w\[\], ]+)?:"#), 3), (r(#"^\s*(from\s+[\w.]+\s+)?import\s+\w+"#), 1),
+                   (r(#"^\s*(if|elif|for|while|with|class|try|except)\b.*:\s*$"#), 2), (r(#"\bself\."#), 1),
+                   (r(#"\bprint\s*\("#), 1), (r(#"\b(None|True|False)\b"#), 1), (r(#"^\s*elif\b"#), 2)]),
+        (.sql, [(r(#"(?i)^\s*(select\s+.+\s+from|insert\s+into|update\s+\w+\s+set|delete\s+from|create\s+(table|index|view))\b"#), 4),
+                (r(#"(?i)\b(where|join|group\s+by|order\s+by)\b"#), 1)]),
+        (.shell, [(r(#"^#!.*\b(ba|z)?sh\b"#), 4), (r(#"^\s*(sudo|cd|ls|echo|export|brew|npm|npx|yarn|pip|git|apt|curl|mkdir|rm|cp|mv|chmod|docker|swift|xcodebuild)\s"#), 3),
+                  (r(#"\$\{?\w+\}?"#), 1), (r(#"(&&|\|\|)\s*\w"#), 1), (r(#"\|\s*(grep|awk|sed|xargs|sort|head|tail)\b"#), 2)]),
+        (.yaml, [(r(#"^[\w-]+:\s*$"#), 1), (r(#"^[\w-]+:[ \t]+\S"#), 1), (r(#"^\s+[\w-]+:\s+\S"#), 1), (r(#"^\s*-\s+[\w-]+:\s"#), 2), (r(#"^---\s*$"#), 1)]),
+    ]
 }
 
 // MARK: - Languages

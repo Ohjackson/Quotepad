@@ -145,6 +145,9 @@ final class CodeBlockView: NSView, NSTextViewDelegate {
     private let placeholder = NSTextField(labelWithString: "")
     private let copyButton = IconButton(symbolName: "doc.on.doc", pointSize: 11, weight: .medium, cornerRadius: 5, label: "복사")
     private let languageMenu = NSPopUpButton(frame: .zero, pullsDown: false)
+    /// The guessed language while the block has none picked (`attachment.language == nil`).
+    private var detectedLanguage: CodeLanguage?
+    private var detectWork: DispatchWorkItem?
     private var copyResetWork: DispatchWorkItem?
     private var isCode: Bool { attachment.kind == .code }
 
@@ -201,15 +204,15 @@ final class CodeBlockView: NSView, NSTextViewDelegate {
             languageMenu.controlSize = .small
             languageMenu.font = .systemFont(ofSize: 11)
             languageMenu.addItem(withTitle: "Text")
+            languageMenu.lastItem?.representedObject = CodeLanguage.plainTextID
             for language in CodeLanguage.all {
                 languageMenu.addItem(withTitle: language.name)
                 languageMenu.lastItem?.representedObject = language.id
             }
-            let selected = CodeLanguage.all.firstIndex { $0.id == attachment.language }.map { $0 + 1 } ?? 0
-            languageMenu.selectItem(at: selected)
+            if attachment.language == nil { detectedLanguage = LanguageDetector.detect(attachment.content) }
+            syncLanguageMenu()
             languageMenu.target = self
             languageMenu.action = #selector(languageChosen)
-            languageMenu.toolTip = "언어"
             addSubview(languageMenu)
             highlight()
         }
@@ -291,22 +294,55 @@ final class CodeBlockView: NSView, NSTextViewDelegate {
     // MARK: - NSTextViewDelegate
 
     @objc private func languageChosen() {
+        // Picking anything, "Text" included, is a choice: detection stops for this block.
         attachment.language = languageMenu.selectedItem?.representedObject as? String
+        detectWork?.cancel()
+        detectedLanguage = nil
+        syncLanguageMenu()
         highlight()
-        resizeSubviews(withOldSize: bounds.size) // the menu's width follows the name
         attachment.host?.codeBlockDidChange(attachment)
         window?.makeFirstResponder(editor)
     }
 
+    /// The picked language, else the guessed one; nil means plain text.
+    private var effectiveLanguage: CodeLanguage? {
+        guard let id = attachment.language else { return detectedLanguage }
+        return CodeLanguage.find(id)
+    }
+
+    private func syncLanguageMenu() {
+        let id = attachment.language ?? detectedLanguage?.id ?? CodeLanguage.plainTextID
+        languageMenu.selectItem(at: max(0, languageMenu.indexOfItem(withRepresentedObject: id)))
+        languageMenu.toolTip = attachment.language == nil && detectedLanguage != nil ? "언어 (자동 인식)" : "언어"
+        resizeSubviews(withOldSize: bounds.size) // the menu's width follows the name
+    }
+
     private func highlight() {
         guard isCode, !editor.hasMarkedText(), let storage = editor.textStorage else { return }
-        SyntaxHighlighter.highlight(storage, language: attachment.language.flatMap(CodeLanguage.find), font: Self.font)
+        SyntaxHighlighter.highlight(storage, language: effectiveLanguage, font: Self.font)
+    }
+
+    /// Re-guesses once typing pauses, so detection never runs per keystroke.
+    private func scheduleDetection() {
+        guard isCode, attachment.language == nil else { return }
+        detectWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.attachment.language == nil else { return }
+            let guess = LanguageDetector.detect(self.attachment.content)
+            guard guess?.id != self.detectedLanguage?.id else { return }
+            self.detectedLanguage = guess
+            self.syncLanguageMenu()
+            self.highlight()
+        }
+        detectWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: work)
     }
 
     func textDidChange(_ notification: Notification) {
         let oldLineCount = attachment.lineCount
         attachment.content = editor.string
         highlight()
+        scheduleDetection()
         placeholder.isHidden = !editor.string.isEmpty
         if attachment.lineCount != oldLineCount {
             attachment.host?.codeBlockDidResize(attachment) // the new frame lays out the subviews
