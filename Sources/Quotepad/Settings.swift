@@ -120,11 +120,13 @@ final class Settings {
         static let fontSize = "fontSize"
         static let editorFont = "editorFont"
         static let listNumbering = "listNumbering"
+        static let codeShortcuts = "codeShortcuts"
+        static let snippetShortcuts = "snippetShortcuts"
         static let spellCheck = "spellCheck"
         static let hideOnFocusLoss = "hideOnFocusLoss"
         static let openPosition = "openPosition"
         static let lastFrame = "lastFrame"
-        static let resettable = [theme, tint, opacity, fontSize, editorFont, listNumbering, spellCheck, hideOnFocusLoss, openPosition]
+        static let resettable = [theme, tint, opacity, fontSize, editorFont, listNumbering, codeShortcuts, snippetShortcuts, spellCheck, hideOnFocusLoss, openPosition]
     }
 
     static let fontSizeRange: ClosedRange<Double> = 11...24
@@ -138,6 +140,8 @@ final class Settings {
             Key.fontSize: 14.0,
             Key.editorFont: EditorFont.system.rawValue,
             Key.listNumbering: ListNumbering.outline.rawValue,
+            Key.codeShortcuts: "/ㅋㄷ",
+            Key.snippetShortcuts: "",
             Key.spellCheck: false,
             Key.hideOnFocusLoss: true,
             Key.openPosition: OpenPosition.topCenter.rawValue,
@@ -172,6 +176,25 @@ final class Settings {
     var listNumbering: ListNumbering {
         get { ListNumbering(rawValue: defaults.integer(forKey: Key.listNumbering)) ?? .outline }
         set { defaults.set(newValue.rawValue, forKey: Key.listNumbering); changed() }
+    }
+
+    /// Extra words that make a code block / a one-line box, as typed in Settings ("/c, /코").
+    var codeShortcuts: String {
+        get { defaults.string(forKey: Key.codeShortcuts) ?? "" }
+        set { defaults.set(newValue, forKey: Key.codeShortcuts); changed() }
+    }
+
+    var snippetShortcuts: String {
+        get { defaults.string(forKey: Key.snippetShortcuts) ?? "" }
+        set { defaults.set(newValue, forKey: Key.snippetShortcuts); changed() }
+    }
+
+    /// "/c, 코 /x" → ["/c", "/코", "/x"]: split on commas and spaces, "/" added where missing, lowercased.
+    static func shortcutSet(_ text: String) -> Set<String> {
+        Set(text.split(whereSeparator: { $0 == "," || $0.isWhitespace }).map { word in
+            let word = word.lowercased()
+            return word.hasPrefix("/") ? word : "/" + word
+        }.filter { $0.count > 1 })
     }
 
     var spellCheck: Bool {

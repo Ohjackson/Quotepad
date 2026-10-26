@@ -7,6 +7,7 @@ final class HelpViewController: NSViewController {
             ("/code", "코드 블록 · 언어 자동 인식"),
             ("/p", "한 줄 복사 박스"),
             ("/help", "이 도움말"),
+            ("⌘, → 단축어", "나만의 단축어 추가"),
         ]),
         ("Markdown", [
             ("# 제목", "제목 (## ### 까지)"),

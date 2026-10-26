@@ -76,6 +76,8 @@ To start Quotepad at login, open the gear menu in the panel (or the menu bar ico
 | `/code` <kbd>Space</kbd> | Insert a multi-line code block (<kbd>Return</kbd> works too) |
 | `/help` <kbd>Space</kbd> | Show commands, Markdown syntax and shortcuts |
 
+Settings → Shortcuts adds your own words for code blocks and one-line boxes (several, comma-separated).
+
 Standard editing shortcuts (<kbd>⌘</kbd> <kbd>C</kbd>/<kbd>X</kbd>/<kbd>V</kbd>/<kbd>A</kbd>/<kbd>Z</kbd>, <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>Z</kbd>) work as usual. Shortcuts are matched by key position, so they keep working with non-Latin input sources such as Korean.
 
 Inside a one-line box, <kbd>Return</kbd> or <kbd>↓</kbd> moves to the line below, <kbd>↑</kbd> moves above, and <kbd>Delete</kbd> in an empty box removes it. In a code block, <kbd>Return</kbd> starts a new line with the same indentation, <kbd>Tab</kbd> indents, and <kbd>↑</kbd> on the first line or <kbd>↓</kbd> on the last line leaves the block. Copying a selection that contains boxes puts Markdown fences on the clipboard (```` ``` ```` for one-line boxes, `~~~` plus the language, like `~~~python`, for code blocks), and pasting fenced text creates boxes.

@@ -430,14 +430,14 @@ enum NoteCodec {
     static let codeFence = "~~~"
     // Typed with the Korean layout on, "/p" comes out as "/ㅔ" and "/code" as "/챙ㄷ".
     static let snippetTriggers: Set<String> = ["/p", "/ㅔ"]
-    static let codeTriggers: Set<String> = ["/code", "/코드", "/챙ㄷ", "/ㅋㄷ"]
+    static let codeTriggers: Set<String> = ["/code", "/코드", "/챙ㄷ"]
     /// "/ㅗ디ㅔ" = "/help" typed with the Korean layout on.
     static let helpTriggers: Set<String> = ["/help", "/도움말", "/ㅗ디ㅔ"]
 
-    /// The box a trigger line asks for.
+    /// The box a trigger line asks for: the built-in words, or the user's own from Settings.
     static func trigger(_ line: String) -> CodeBlockKind? {
-        if snippetTriggers.contains(line) { return .snippet }
-        if codeTriggers.contains(line) { return .code }
+        if snippetTriggers.contains(line) || Settings.shortcutSet(Settings.shared.snippetShortcuts).contains(line) { return .snippet }
+        if codeTriggers.contains(line) || Settings.shortcutSet(Settings.shared.codeShortcuts).contains(line) { return .code }
         return nil
     }
 
