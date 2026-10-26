@@ -38,7 +38,7 @@ Some notes don't deserve a Notes.app document: an email address you're about to 
 
 ## Install
 
-Requires macOS 13 or later.
+Requires macOS 13 or later. Tested on macOS 26.6 (built with the macOS 27 SDK, Swift 6.4).
 
 ### Download
 
@@ -50,7 +50,7 @@ Look for the note icon in the menu bar, then press <kbd>⌘</kbd> <kbd>'</kbd>.
 
 ### Build from source
 
-You need the Xcode Command Line Tools (`xcode-select --install`).
+You need the Xcode Command Line Tools (`xcode-select --install`). The current tools work: the package targets macOS 13, and Quotepad renders the same whether macOS runs it in its macOS 13 compatibility mode (a `swift build` binary) or with current behavior.
 
 ```bash
 git clone https://github.com/Ohjackson/Quotepad.git
