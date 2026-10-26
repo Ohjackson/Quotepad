@@ -414,6 +414,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         textView.drawsBackground = false
         textView.isRichText = false
         textView.allowsUndo = true
+        // Smart dashes would turn Markdown's "---" (a rule) and "--" into em/en dashes.
+        textView.isAutomaticDashSubstitutionEnabled = false
         textView.textContainerInset = NSSize(width: 5, height: 10)
         textView.textLayoutManager?.delegate = markdownLayoutDelegate
         scrollView.documentView = textView
