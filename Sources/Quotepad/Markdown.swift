@@ -700,11 +700,14 @@ enum Markdown {
         (italicUnderscore, "$1"),
     ]
 
-    /// A line as a tab title: without heading "#"s and inline marks (`code`, **bold**, ...).
+    private static let titleBullet = regex(#"^[-*+][ \t]+(?:\[[ xX]\][ \t]+)?"#)
+
+    /// A line as a tab title: without heading "#"s, bullets and inline marks (`code`, **bold**, ...).
     static func plainTitle(_ line: String) -> String {
         var title = line
         let ns = line as NSString
-        if let m = match(titleHeading, in: ns, NSRange(location: 0, length: ns.length)) {
+        if let m = match(titleHeading, in: ns, NSRange(location: 0, length: ns.length))
+            ?? match(titleBullet, in: ns, NSRange(location: 0, length: ns.length)) {
             title = ns.substring(from: NSMaxRange(m.range))
         }
         for (pattern, template) in titleMarks {
