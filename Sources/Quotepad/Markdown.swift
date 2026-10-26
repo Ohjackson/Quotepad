@@ -500,7 +500,19 @@ private final class MarkdownLayoutFragment: NSTextLayoutFragment {
 
     private var string: NSAttributedString? { (textElement as? NSTextParagraph)?.attributedString }
 
-    /// The text width of the container; `point.x` in `draw` is already past the left padding.
+    /// Where a line's first character is drawn, in `draw`'s coordinates. Only the line's glyph origin
+    /// is reliable here: depending on how the view renders (a layer per line on screen, or one pass
+    /// into a bitmap), the fragment frame, typographic bounds and character locations are reported
+    /// relative to different origins, with or without the container padding and the indent.
+    private func lineStartX(_ line: NSTextLineFragment, at point: CGPoint) -> CGFloat {
+        point.x + line.glyphOrigin.x
+    }
+
+    private func textStartX(at point: CGPoint) -> CGFloat {
+        textLineFragments.first.map { lineStartX($0, at: point) } ?? point.x
+    }
+
+    /// The text width of the container, between its left and right padding.
     private var lineWidth: CGFloat {
         let padding = textLayoutManager?.textContainer?.lineFragmentPadding ?? 5
         return (textLayoutManager?.textContainer?.size.width ?? layoutFragmentFrame.width) - padding * 2
@@ -522,7 +534,7 @@ private final class MarkdownLayoutFragment: NSTextLayoutFragment {
         if let rule = width(Markdown.ruleKey, in: string) {
             // Keeps the line's height (and caret) but draws a rule instead of the text.
             let lineHeight = textLineFragments.first?.typographicBounds.height ?? layoutFragmentFrame.height
-            strokeLine(at: point.y + lineHeight / 2, from: point.x, width: rule, in: context)
+            strokeLine(at: point.y + lineHeight / 2, from: textStartX(at: point), width: rule, in: context)
             return
         }
         drawCodeChips(string, at: point, in: context)
@@ -537,7 +549,7 @@ private final class MarkdownLayoutFragment: NSTextLayoutFragment {
         if row.kind != .separator, let last = textLineFragments.last {
             height = max(height, last.typographicBounds.maxY + Markdown.rowPadding)
         }
-        let left = point.x.rounded() + 0.5
+        let left = textStartX(at: point).rounded() + 0.5
         let width = (row.edges.last ?? 0).rounded()
         context.saveGState()
         if row.kind == .header {
@@ -571,10 +583,12 @@ private final class MarkdownLayoutFragment: NSTextLayoutFragment {
             for line in textLineFragments {
                 let part = NSIntersectionRange(range, line.characterRange)
                 guard part.length > 0 else { continue }
-                let start = line.locationForCharacter(at: part.location).x
-                let end = line.locationForCharacter(at: NSMaxRange(part)).x
+                // Offsets from the line's first character, whatever origin TextKit measures them from.
+                let lineStart = line.locationForCharacter(at: line.characterRange.location).x
+                let start = line.locationForCharacter(at: part.location).x - lineStart
+                let end = line.locationForCharacter(at: NSMaxRange(part)).x - lineStart
                 let bounds = line.typographicBounds
-                let rect = CGRect(x: point.x + bounds.minX + start, y: point.y + bounds.minY + 1,
+                let rect = CGRect(x: lineStartX(line, at: point) + start, y: point.y + bounds.minY + 1,
                                   width: end - start, height: bounds.height - 2)
                 context.addPath(CGPath(roundedRect: rect, cornerWidth: 4, cornerHeight: 4, transform: nil))
             }
