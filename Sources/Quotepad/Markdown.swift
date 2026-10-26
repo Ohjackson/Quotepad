@@ -2,8 +2,8 @@ import Cocoa
 
 // Live Markdown look for the note editor. Only attributes change, never the text: syntax marks
 // stay in the note but are drawn invisibly (list and fence marks stay visible, dimmed; a "---"
-// line is drawn as a horizontal rule, tables as aligned columns), so notes remain plain Markdown
-// on disk and when copied.
+// line is drawn as a horizontal rule, tables as a grid), so notes remain plain Markdown on disk
+// and when copied.
 //
 //     # Heading        **bold**   *italic*   ~~strike~~   `code`
 //     - item / 1. item / - [ ] task / - [x] done
@@ -33,8 +33,11 @@ enum Markdown {
     private static let quoteIndent: CGFloat = 14
     /// Room inside an inline code chip, on each side of its text.
     private static let codePadding: CGFloat = 3
-    /// Space between table columns.
-    private static let columnGap: CGFloat = 16
+    /// Room between a table cell's border and its text.
+    private static let cellPadding: CGFloat = 10
+    private static let minimumColumnWidth: CGFloat = 60
+    /// Room above and below the text of a table row.
+    static let rowPadding: CGFloat = 6
     private static let hiddenFont = NSFont.systemFont(ofSize: 0.01)
 
     /// Marks syntax characters that are drawn invisibly; the value is a `HiddenKind` raw value.
@@ -44,8 +47,8 @@ enum Markdown {
     static let ruleKey = NSAttributedString.Key("QuotepadMarkdownRule")
     /// Marks inline code (backticks included); `MarkdownLayoutDelegate` draws a chip behind it.
     static let codeKey = NSAttributedString.Key("QuotepadMarkdownCode")
-    /// Marks a table row that gets a line under it; the value is the table width as an `NSNumber`.
-    static let rowBorderKey = NSAttributedString.Key("QuotepadMarkdownRowBorder")
+    /// Marks a table row; the value is a `TableRowGeometry` that `MarkdownLayoutDelegate` draws the grid from.
+    static let tableRowKey = NSAttributedString.Key("QuotepadMarkdownTableRow")
 
     enum HiddenKind: String {
         /// "## " or "> " at the start of a line: the caret never stops inside or before it.
@@ -77,7 +80,7 @@ enum Markdown {
         storage.addAttributes(base, range: whole)
         storage.addAttribute(.paragraphStyle, value: NSParagraphStyle.default, range: whole)
         storage.removeAttribute(.strikethroughStyle, range: whole)
-        for key in [hiddenKey, ruleKey, codeKey, rowBorderKey, .kern] {
+        for key in [hiddenKey, ruleKey, codeKey, tableRowKey, .kern] {
             storage.removeAttribute(key, range: whole)
         }
 
@@ -185,56 +188,81 @@ enum Markdown {
         return end
     }
 
-    /// Hides the pipes and lines the columns up by kerning the end of each cell to its column's width.
+    /// Draws the table as a grid, like Notion: the pipes and the spaces around cell text are
+    /// hidden, and kerning gives each cell its padding and its column's width.
     private static func styleTable(_ lines: [NSRange], in storage: NSTextStorage, text: NSString) {
         let rows = [lines[0]] + lines.dropFirst(2)
         let rowStyle = NSMutableParagraphStyle()
-        rowStyle.paragraphSpacingBefore = 3
-        rowStyle.paragraphSpacing = 3
+        rowStyle.paragraphSpacingBefore = rowPadding
+        rowStyle.paragraphSpacing = rowPadding
 
-        var cellsByRow: [[NSRange]] = []
-        for (rowIndex, row) in rows.enumerated() {
+        // Each cell: its whole range between pipes, the pipe before it, and its text without the spaces.
+        var cellsByRow: [[(range: NSRange, pipe: Int, text: NSRange)]] = []
+        for row in rows {
             let pipes = pipePositions(in: row, text: text)
-            var cells: [NSRange] = []
+            var cells: [(range: NSRange, pipe: Int, text: NSRange)] = []
             for (n, pipe) in pipes.enumerated() {
                 let end = n + 1 < pipes.count ? pipes[n + 1] : NSMaxRange(row)
                 if n + 1 == pipes.count && end == pipe + 1 { break } // nothing after the closing pipe
-                cells.append(NSRange(location: pipe + 1, length: end - pipe - 1))
+                let range = NSRange(location: pipe + 1, length: end - pipe - 1)
+                cells.append((range, pipe, trimmed(range, in: text)))
             }
             storage.addAttribute(.paragraphStyle, value: rowStyle, range: row)
-            if rowIndex == 0 { addTraits(.bold, to: row, in: storage) }
-            for cell in cells { styleInline(cell, in: storage, text: text) }
+            for cell in cells {
+                styleInline(cell.text, in: storage, text: text)
+                // The spaces around the text: hidden, so cells line up however they were typed.
+                let before = NSRange(location: cell.range.location, length: cell.text.location - cell.range.location)
+                let after = NSRange(location: NSMaxRange(cell.text), length: NSMaxRange(cell.range) - NSMaxRange(cell.text))
+                for space in [before, after] where space.length > 0 { hide(space, .inline, in: storage) }
+            }
             for pipe in pipes { hide(NSRange(location: pipe, length: 1), .pipe, in: storage) }
             cellsByRow.append(cells)
         }
 
         // Column widths, measured after the cells got their final fonts.
+        func textWidth(_ range: NSRange) -> CGFloat {
+            range.length == 0 ? 0 : ceil(storage.attributedSubstring(from: range).size().width)
+        }
         var widths: [CGFloat] = []
         for cells in cellsByRow {
             for (column, cell) in cells.enumerated() {
-                let width = ceil(storage.attributedSubstring(from: cell).size().width)
+                let width = max(minimumColumnWidth, textWidth(cell.text) + cellPadding * 2)
                 if column < widths.count { widths[column] = max(widths[column], width) } else { widths.append(width) }
             }
         }
         for cells in cellsByRow {
-            for (column, cell) in cells.enumerated().dropLast() {
-                let width = ceil(storage.attributedSubstring(from: cell).size().width)
-                // An empty cell's last character is the pipe before it.
-                addKern(widths[column] + columnGap - width, at: NSMaxRange(cell) - 1, in: storage)
+            for (column, cell) in cells.enumerated() {
+                addKern(cellPadding, at: cell.pipe, in: storage)
+                // The cell's last character (the pipe before it, if the cell is empty) pushes the next cell over.
+                let last = cell.range.length > 0 ? NSMaxRange(cell.range) - 1 : cell.pipe
+                addKern(widths[column] - cellPadding - textWidth(cell.text), at: last, in: storage)
             }
         }
-        let tableWidth = NSNumber(value: Double(widths.reduce(0, +) + columnGap * CGFloat(max(0, widths.count - 1))))
 
-        // Header separator: drawn as a rule, its text hidden and its line kept short.
+        var edges: [CGFloat] = [0]
+        for width in widths { edges.append(edges[edges.count - 1] + width) }
+        for (index, row) in rows.enumerated() {
+            let kind: TableRowGeometry.Kind = index == 0 ? .header : .body
+            storage.addAttribute(tableRowKey, value: TableRowGeometry(edges: edges, kind: kind), range: row)
+        }
+
+        // Header separator: hidden and squeezed to a hairline; the grid already shows the header's edge.
         let separator = lines[1]
         hide(separator, .block, in: storage)
         let separatorStyle = NSMutableParagraphStyle()
-        separatorStyle.minimumLineHeight = 8
-        separatorStyle.maximumLineHeight = 8
-        storage.addAttributes([ruleKey: tableWidth, .paragraphStyle: separatorStyle], range: separator)
-        for row in rows.dropFirst().dropLast() {
-            storage.addAttribute(rowBorderKey, value: tableWidth, range: row)
-        }
+        separatorStyle.minimumLineHeight = 1
+        separatorStyle.maximumLineHeight = 1
+        storage.addAttributes([
+            tableRowKey: TableRowGeometry(edges: edges, kind: .separator),
+            .paragraphStyle: separatorStyle,
+        ], range: separator)
+    }
+
+    private static func trimmed(_ range: NSRange, in text: NSString) -> NSRange {
+        var start = range.location, end = NSMaxRange(range)
+        while start < end, text.character(at: start) == 0x20 || text.character(at: start) == 0x09 { start += 1 }
+        while end > start, text.character(at: end - 1) == 0x20 || text.character(at: end - 1) == 0x09 { end -= 1 }
+        return NSRange(location: start, length: end - start)
     }
 
     /// Positions of the "|" that split cells: not escaped ("\|") and not inside `code`.
@@ -462,7 +490,7 @@ private final class MarkdownLayoutFragment: NSTextLayoutFragment {
     static func needsDrawing(_ string: NSAttributedString) -> Bool {
         guard string.length > 0 else { return false }
         if string.attribute(Markdown.ruleKey, at: 0, effectiveRange: nil) != nil
-            || string.attribute(Markdown.rowBorderKey, at: 0, effectiveRange: nil) != nil { return true }
+            || string.attribute(Markdown.tableRowKey, at: 0, effectiveRange: nil) != nil { return true }
         var hasCode = false
         string.enumerateAttribute(Markdown.codeKey, in: NSRange(location: 0, length: string.length)) { value, _, stop in
             if value != nil { hasCode = true; stop.pointee = true }
@@ -485,6 +513,12 @@ private final class MarkdownLayoutFragment: NSTextLayoutFragment {
 
     override func draw(at point: CGPoint, in context: CGContext) {
         guard let string, string.length > 0 else { return super.draw(at: point, in: context) }
+        if let row = string.attribute(Markdown.tableRowKey, at: 0, effectiveRange: nil) as? TableRowGeometry {
+            drawTableRow(row, at: point, in: context)
+            if row.kind == .separator { return }
+            drawCodeChips(string, at: point, in: context)
+            return super.draw(at: point, in: context)
+        }
         if let rule = width(Markdown.ruleKey, in: string) {
             // Keeps the line's height (and caret) but draws a rule instead of the text.
             let lineHeight = textLineFragments.first?.typographicBounds.height ?? layoutFragmentFrame.height
@@ -493,9 +527,40 @@ private final class MarkdownLayoutFragment: NSTextLayoutFragment {
         }
         drawCodeChips(string, at: point, in: context)
         super.draw(at: point, in: context)
-        if let border = width(Markdown.rowBorderKey, in: string) {
-            strokeLine(at: point.y + layoutFragmentFrame.height - 1, from: point.x, width: border, in: context)
+    }
+
+    /// One row of the grid: header shading, the line under the row (and above the header), and the
+    /// column lines, which join up across rows into the table's borders.
+    private func drawTableRow(_ row: TableRowGeometry, at point: CGPoint, in context: CGContext) {
+        var height = layoutFragmentFrame.height
+        // The note's last paragraph gets no spacing after it; keep a closing row as tall as the others.
+        if row.kind != .separator, let last = textLineFragments.last {
+            height = max(height, last.typographicBounds.maxY + Markdown.rowPadding)
         }
+        let left = point.x.rounded() + 0.5
+        let width = (row.edges.last ?? 0).rounded()
+        context.saveGState()
+        if row.kind == .header {
+            context.setFillColor(NSColor.labelColor.withAlphaComponent(0.05).cgColor)
+            context.fill(CGRect(x: left, y: point.y, width: width, height: height))
+        }
+        context.setStrokeColor(NSColor.separatorColor.cgColor)
+        context.setLineWidth(1)
+        for edge in row.edges {
+            let x = left + edge.rounded()
+            context.move(to: CGPoint(x: x, y: point.y))
+            context.addLine(to: CGPoint(x: x, y: point.y + height))
+        }
+        var rules: [CGFloat] = []
+        if row.kind == .header { rules.append(point.y) }
+        if row.kind != .separator { rules.append(point.y + height) }
+        for y in rules {
+            let y = (y - (y == point.y ? 0 : 1)).rounded() + 0.5
+            context.move(to: CGPoint(x: left, y: y))
+            context.addLine(to: CGPoint(x: left + width, y: y))
+        }
+        context.strokePath()
+        context.restoreGState()
     }
 
     private func drawCodeChips(_ string: NSAttributedString, at point: CGPoint, in context: CGContext) {
@@ -531,6 +596,21 @@ private final class MarkdownLayoutFragment: NSTextLayoutFragment {
 
     override var renderingSurfaceBounds: CGRect {
         let width = textLayoutManager?.textContainer?.size.width ?? layoutFragmentFrame.width
-        return super.renderingSurfaceBounds.union(CGRect(x: 0, y: 0, width: width, height: layoutFragmentFrame.height))
+        // Table rows may draw a little below the fragment (see `drawTableRow`).
+        let height = layoutFragmentFrame.height + Markdown.rowPadding
+        return super.renderingSurfaceBounds.union(CGRect(x: 0, y: 0, width: width, height: height))
+    }
+}
+
+/// Where a table row's column lines go (from the row's left edge) and which row it is.
+final class TableRowGeometry: NSObject {
+    enum Kind { case header, separator, body }
+
+    let edges: [CGFloat]
+    let kind: Kind
+
+    init(edges: [CGFloat], kind: Kind) {
+        self.edges = edges
+        self.kind = kind
     }
 }
