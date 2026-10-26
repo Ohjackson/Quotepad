@@ -710,10 +710,10 @@ enum Markdown {
             ?? match(titleBullet, in: ns, NSRange(location: 0, length: ns.length)) {
             title = ns.substring(from: NSMaxRange(m.range))
         }
-        for (pattern, template) in titleMarks {
+        for (pattern, template) in titleMarks + [(ImageStore.reference, "")] {
             title = pattern.stringByReplacingMatches(in: title, range: NSRange(location: 0, length: (title as NSString).length), withTemplate: template)
         }
-        return title
+        return title.trimmingCharacters(in: .whitespaces) // a picture-only line leaves nothing: the next line titles the tab
     }
 }
 

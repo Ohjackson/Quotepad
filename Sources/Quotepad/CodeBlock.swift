@@ -480,10 +480,28 @@ enum NoteCodec {
                 result.append(attachmentString(attachment, attributes: attributes))
                 index = close + 1
             } else {
-                result.append(NSAttributedString(string: lines[index], attributes: attributes))
+                result.append(decodeImages(in: lines[index], attributes: attributes, host: host))
                 index += 1
             }
         }
+        return result
+    }
+
+    /// A line of text with its `![](images/…)` references turned into pictures.
+    private static func decodeImages(in line: String, attributes: [NSAttributedString.Key: Any], host: CodeBlockHost?) -> NSAttributedString {
+        let ns = line as NSString
+        let result = NSMutableAttributedString()
+        var cursor = 0
+        for match in ImageStore.reference.matches(in: line, range: NSRange(location: 0, length: ns.length)) {
+            result.append(NSAttributedString(string: ns.substring(with: NSRange(location: cursor, length: match.range.location - cursor)), attributes: attributes))
+            let attachment = ImageAttachment(fileName: ns.substring(with: match.range(at: 1)))
+            attachment.host = host as? ImageBlockHost
+            let picture = NSMutableAttributedString(attachment: attachment)
+            picture.addAttributes(attributes, range: NSRange(location: 0, length: picture.length))
+            result.append(picture)
+            cursor = NSMaxRange(match.range)
+        }
+        result.append(NSAttributedString(string: ns.substring(from: cursor), attributes: attributes))
         return result
     }
 
@@ -492,6 +510,12 @@ enum NoteCodec {
         var output = ""
         var cursor = 0
         attributed.enumerateAttribute(.attachment, in: NSRange(location: 0, length: attributed.length)) { value, range, _ in
+            if let picture = value as? ImageAttachment {
+                output += source.substring(with: NSRange(location: cursor, length: range.location - cursor))
+                output += ImageStore.markdown(for: picture.fileName)
+                cursor = range.location + range.length
+                return
+            }
             guard let block = value as? CodeBlockAttachment else { return }
             output += source.substring(with: NSRange(location: cursor, length: range.location - cursor))
             switch block.kind {
@@ -514,6 +538,14 @@ final class NoteTextView: NSTextView {
     override func insertText(_ string: Any, replacementRange: NSRange) {
         let text = (string as? String) ?? (string as? NSAttributedString)?.string
         if text == " ", !hasMarkedText(), spaceHandler?() == true { return }
+        // A picture keeps its line to itself: text typed right beside it goes on the next line.
+        if !hasMarkedText(), let storage = textStorage, let text, !text.isEmpty, text != "\n" {
+            let caret = replacementRange.location == NSNotFound ? selectedRange().location : replacementRange.location
+            if caret > 0, caret <= storage.length, storage.attribute(.attachment, at: caret - 1, effectiveRange: nil) is ImageAttachment {
+                super.insertText("\n", replacementRange: replacementRange)
+                return super.insertText(string, replacementRange: selectedRange())
+            }
+        }
         super.insertText(string, replacementRange: replacementRange)
     }
 
@@ -525,7 +557,49 @@ final class NoteTextView: NSTextView {
         return pboard.setString(NoteCodec.encode(storage.attributedSubstring(from: selectedRange())), forType: .string)
     }
 
+    // Pictures: pasted (screenshots, copied images, copied image files) or dragged in.
+    private static let imageTypes: [NSPasteboard.PasteboardType] = [.fileURL, .png, .tiff]
+
+    override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
+        super.readablePasteboardTypes + Self.imageTypes
+    }
+
+    override var acceptableDragTypes: [NSPasteboard.PasteboardType] {
+        super.acceptableDragTypes + Self.imageTypes
+    }
+
+    override func readSelection(from pboard: NSPasteboard) -> Bool {
+        insertImages(from: pboard) || super.readSelection(from: pboard)
+    }
+
+    /// Each picture goes on a line of its own.
+    private func insertImages(from pboard: NSPasteboard) -> Bool {
+        let names = ImageStore.importImages(from: pboard)
+        guard !names.isEmpty, let storage = textStorage else { return false }
+        let range = selectedRange()
+        let text = storage.string as NSString
+        let pictures = NSMutableAttributedString()
+        if range.location > 0, text.character(at: range.location - 1) != 0x0A {
+            pictures.append(NSAttributedString(string: "\n", attributes: typingAttributes))
+        }
+        for (index, name) in names.enumerated() {
+            if index > 0 { pictures.append(NSAttributedString(string: "\n", attributes: typingAttributes)) }
+            let attachment = ImageAttachment(fileName: name)
+            attachment.host = codeBlockHost as? ImageBlockHost
+            let picture = NSMutableAttributedString(attachment: attachment)
+            picture.addAttributes(typingAttributes, range: NSRange(location: 0, length: picture.length))
+            pictures.append(picture)
+        }
+        pictures.append(NSAttributedString(string: "\n", attributes: typingAttributes))
+        guard shouldChangeText(in: range, replacementString: pictures.string) else { return true }
+        storage.replaceCharacters(in: range, with: pictures)
+        didChangeText()
+        setSelectedRange(NSRange(location: range.location + pictures.length, length: 0))
+        return true
+    }
+
     override func readSelection(from pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
+        if Self.imageTypes.contains(type), insertImages(from: pboard) { return true }
         guard let pasted = pboard.string(forType: .string), let storage = textStorage else {
             return super.readSelection(from: pboard, type: type)
         }

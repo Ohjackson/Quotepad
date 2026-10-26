@@ -18,6 +18,7 @@ final class HelpViewController: NSViewController {
             ("> 인용", "인용"),
             ("---", "구분선"),
             ("| a | b |", "표"),
+            ("⌘V · 끌어놓기", "사진 넣기"),
         ]),
         ("단축키", [
             ("⌘'", "열기 / 닫기"),

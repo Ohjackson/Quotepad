@@ -57,7 +57,7 @@ final class TintView: NSView {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTextViewDelegate,
-    NSMenuItemValidation, NSPopoverDelegate, CodeBlockHost {
+    NSMenuItemValidation, NSPopoverDelegate, CodeBlockHost, ImageBlockHost {
     static let cornerRadius: CGFloat = 14
 
     var panel: OverlayPanel!
@@ -102,6 +102,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory) // no Dock icon, menu-bar only
         loadState()
+        ImageStore.removeUnused(referencedBy: tabs.map(\.text))
         setupStatusItem()
         setupPanel()
         applySettings()
@@ -277,11 +278,97 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
 
     func textViewDidChangeSelection(_ notification: Notification) {
         updateTypingAttributes()
+        // The caret parked right after a picture means the picture is selected: a ring instead of a
+        // line-tall caret. Anywhere else, nothing is.
+        let selection = textView.selectedRange()
+        if selection.length == 0, selection.location > 0, let storage = textView.textStorage, selection.location <= storage.length,
+           let picture = storage.attribute(.attachment, at: selection.location - 1, effectiveRange: nil) as? ImageAttachment {
+            selectPicture(picture)
+        } else {
+            selectPicture(nil)
+        }
+    }
+
+    // MARK: - Pictures
+
+    /// The picture with a ring around it; Backspace deletes it.
+    var selectedPicture: ImageAttachment?
+
+    /// A click selects the picture Notion-style: a ring, and the caret parked right after it
+    /// (instead of a text selection, which would paint the whole line blue).
+    func imageBlockClicked(_ attachment: ImageAttachment) {
+        guard let range = range(of: attachment) else { return }
+        panel.makeFirstResponder(textView)
+        textView.setSelectedRange(NSRange(location: NSMaxRange(range), length: 0))
+    }
+
+    func selectPicture(_ attachment: ImageAttachment?) {
+        guard attachment !== selectedPicture else { return }
+        selectedPicture?.isSelected = false
+        selectedPicture = attachment
+        attachment?.isSelected = true
+        textView.insertionPointColor = attachment == nil ? caretColor : .clear
+    }
+
+    /// The text view's own caret color, put back once no picture is selected.
+    lazy var caretColor: NSColor = textView.insertionPointColor
+
+    func containsOnlyPictures(_ range: NSRange, in storage: NSTextStorage) -> Bool {
+        let text = storage.string as NSString
+        var pictures = 0
+        for index in range.location..<NSMaxRange(range) {
+            if storage.attribute(.attachment, at: index, effectiveRange: nil) is ImageAttachment {
+                pictures += 1
+            } else if text.character(at: index) != 0x0A {
+                return false
+            }
+        }
+        return pictures > 0
+    }
+
+    /// Backspace around pictures, like Notion: right below one it first selects it; once selected
+    /// it removes the picture and its line.
+    func deleteBackwardAroundPicture() -> Bool {
+        let selection = textView.selectedRange()
+        guard selection.length == 0, selection.location > 0, let storage = textView.textStorage else { return false }
+        let text = storage.string as NSString
+        if storage.attribute(.attachment, at: selection.location - 1, effectiveRange: nil) is ImageAttachment {
+            var range = NSRange(location: selection.location - 1, length: 1)
+            if NSMaxRange(range) < text.length, text.character(at: NSMaxRange(range)) == 0x0A {
+                range.length += 1
+            } else if range.location > 0, text.character(at: range.location - 1) == 0x0A {
+                range = NSRange(location: range.location - 1, length: 2)
+            }
+            textView.insertText("", replacementRange: range)
+            return true
+        }
+        if text.character(at: selection.location - 1) == 0x0A, selection.location >= 2,
+           storage.attribute(.attachment, at: selection.location - 2, effectiveRange: nil) is ImageAttachment {
+            textView.setSelectedRange(NSRange(location: selection.location - 1, length: 0)) // selects the picture
+            return true
+        }
+        return false
     }
 
     /// Keeps the caret out of hidden marks, so it never sits somewhere that looks the same but types differently.
     func textView(_ textView: NSTextView, willChangeSelectionFromCharacterRange oldRange: NSRange,
                   toCharacterRange newRange: NSRange) -> NSRange {
+        // A selection of nothing but pictures (e.g. what a drop leaves selected) would paint their whole
+        // lines blue: it becomes the last picture's ring instead.
+        if textView === self.textView, newRange.length > 0, let storage = textView.textStorage,
+           NSMaxRange(newRange) <= storage.length, containsOnlyPictures(newRange, in: storage) {
+            var end = NSMaxRange(newRange)
+            while end > newRange.location, (storage.string as NSString).character(at: end - 1) == 0x0A { end -= 1 }
+            return NSRange(location: end, length: 0)
+        }
+        // The caret never sits before a picture (that spot looks like nothing): it selects the picture
+        // instead, or, moving left from it, goes on to the line above.
+        if textView === self.textView, newRange.length == 0, let storage = textView.textStorage,
+           newRange.location < storage.length,
+           storage.attribute(.attachment, at: newRange.location, effectiveRange: nil) is ImageAttachment {
+            let leftFromPicture = oldRange.length == 0 && oldRange.location == newRange.location + 1
+            return NSRange(location: leftFromPicture && newRange.location > 0 ? newRange.location - 1 : newRange.location + 1, length: 0)
+        }
         guard textView === self.textView, newRange.length == 0, let storage = textView.textStorage,
               let run = Markdown.hiddenRun(trapping: newRange.location, in: storage) else { return newRange }
         let start = run.range.location, end = NSMaxRange(run.range)
@@ -556,7 +643,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     // MARK: - Code boxes
 
     func textView(_ textView: NSTextView, doCommandBy selector: Selector) -> Bool {
-        if selector == #selector(NSResponder.deleteBackward(_:)) { return deleteBackwardOverHiddenMarkdown() }
+        if selector == #selector(NSResponder.deleteBackward(_:)) {
+            return deleteBackwardAroundPicture() || deleteBackwardOverHiddenMarkdown()
+        }
         if selector == #selector(NSResponder.insertTab(_:)) { return indentListItem(outdent: false) }
         if selector == #selector(NSResponder.insertBacktab(_:)) { return indentListItem(outdent: true) }
         guard selector == #selector(NSResponder.insertNewline(_:)) else { return false }
@@ -662,11 +751,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         textView.setSelectedRange(NSRange(location: range.location + 1, length: 0))
     }
 
-    func range(of attachment: CodeBlockAttachment) -> NSRange? {
+    func range(of attachment: NSTextAttachment) -> NSRange? {
         guard let storage = textView.textStorage else { return nil }
         var found: NSRange?
         storage.enumerateAttribute(.attachment, in: NSRange(location: 0, length: storage.length)) { value, range, stop in
-            if (value as? CodeBlockAttachment) === attachment {
+            if (value as? NSTextAttachment) === attachment {
                 found = range
                 stop.pointee = true
             }
