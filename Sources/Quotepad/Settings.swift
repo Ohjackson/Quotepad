@@ -45,6 +45,19 @@ enum EditorFont: Int, CaseIterable {
     }
 }
 
+/// How numbers in nested ordered lists are shown. The note always stores plain Markdown ("1.").
+enum ListNumbering: Int, CaseIterable {
+    case outline, letters, plain
+
+    var title: String {
+        switch self {
+        case .outline: return "3.1 · 3.2"
+        case .letters: return "a · b · c"
+        case .plain: return "1 · 2 · 3"
+        }
+    }
+}
+
 enum OpenPosition: Int, CaseIterable {
     case topCenter, lastPosition
 
@@ -106,11 +119,12 @@ final class Settings {
         static let opacity = "backgroundOpacity"
         static let fontSize = "fontSize"
         static let editorFont = "editorFont"
+        static let listNumbering = "listNumbering"
         static let spellCheck = "spellCheck"
         static let hideOnFocusLoss = "hideOnFocusLoss"
         static let openPosition = "openPosition"
         static let lastFrame = "lastFrame"
-        static let resettable = [theme, tint, opacity, fontSize, editorFont, spellCheck, hideOnFocusLoss, openPosition]
+        static let resettable = [theme, tint, opacity, fontSize, editorFont, listNumbering, spellCheck, hideOnFocusLoss, openPosition]
     }
 
     static let fontSizeRange: ClosedRange<Double> = 11...24
@@ -123,6 +137,7 @@ final class Settings {
             Key.opacity: 1.0,
             Key.fontSize: 14.0,
             Key.editorFont: EditorFont.system.rawValue,
+            Key.listNumbering: ListNumbering.outline.rawValue,
             Key.spellCheck: false,
             Key.hideOnFocusLoss: true,
             Key.openPosition: OpenPosition.topCenter.rawValue,
@@ -152,6 +167,11 @@ final class Settings {
     var editorFont: EditorFont {
         get { EditorFont(rawValue: defaults.integer(forKey: Key.editorFont)) ?? .system }
         set { defaults.set(newValue.rawValue, forKey: Key.editorFont); changed() }
+    }
+
+    var listNumbering: ListNumbering {
+        get { ListNumbering(rawValue: defaults.integer(forKey: Key.listNumbering)) ?? .outline }
+        set { defaults.set(newValue.rawValue, forKey: Key.listNumbering); changed() }
     }
 
     var spellCheck: Bool {

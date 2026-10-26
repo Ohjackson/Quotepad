@@ -57,6 +57,7 @@ final class SettingsViewController: NSViewController {
     private let fontSizeSlider = NSSlider(value: 14, minValue: Settings.fontSizeRange.lowerBound, maxValue: Settings.fontSizeRange.upperBound, target: nil, action: nil)
     private let fontSizeLabel = NSTextField(labelWithString: "")
     private let fontPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let numberingPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let spellCheckbox = NSButton(checkboxWithTitle: "맞춤법 검사", target: nil, action: nil)
     private let hideCheckbox = NSButton(checkboxWithTitle: "다른 곳을 클릭하면 숨기기", target: nil, action: nil)
     private let positionPopup = NSPopUpButton(frame: .zero, pullsDown: false)
@@ -88,6 +89,7 @@ final class SettingsViewController: NSViewController {
         header("편집기")
         row("글자 크기", hStack([fontSizeSlider, fontSizeLabel], spacing: 8))
         row("글꼴", fontPopup)
+        row("하위 번호", numberingPopup)
         row(spellCheckbox)
         header("동작")
         row("열릴 위치", positionPopup)
@@ -167,6 +169,10 @@ final class SettingsViewController: NSViewController {
         fontPopup.target = self
         fontPopup.action = #selector(fontChanged)
 
+        numberingPopup.addItems(withTitles: ListNumbering.allCases.map(\.title))
+        numberingPopup.target = self
+        numberingPopup.action = #selector(numberingChanged)
+
         positionPopup.addItems(withTitles: OpenPosition.allCases.map(\.title))
         positionPopup.target = self
         positionPopup.action = #selector(positionChanged)
@@ -188,6 +194,7 @@ final class SettingsViewController: NSViewController {
         fontSizeSlider.doubleValue = settings.fontSize
         fontSizeLabel.stringValue = "\(Int(settings.fontSize))pt"
         fontPopup.selectItem(at: settings.editorFont.rawValue)
+        numberingPopup.selectItem(at: settings.listNumbering.rawValue)
         spellCheckbox.state = settings.spellCheck ? .on : .off
         hideCheckbox.state = settings.hideOnFocusLoss ? .on : .off
         positionPopup.selectItem(at: settings.openPosition.rawValue)
@@ -214,6 +221,10 @@ final class SettingsViewController: NSViewController {
 
     @objc private func fontChanged() {
         settings.editorFont = EditorFont(rawValue: fontPopup.indexOfSelectedItem) ?? .system
+    }
+
+    @objc private func numberingChanged() {
+        settings.listNumbering = ListNumbering(rawValue: numberingPopup.indexOfSelectedItem) ?? .outline
     }
 
     @objc private func positionChanged() {

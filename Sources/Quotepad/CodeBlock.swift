@@ -526,7 +526,12 @@ final class NoteTextView: NSTextView {
     }
 
     override func readSelection(from pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
-        guard let text = pboard.string(forType: .string), NoteCodec.containsFence(text), let storage = textStorage else {
+        guard let pasted = pboard.string(forType: .string), let storage = textStorage else {
+            return super.readSelection(from: pboard, type: type)
+        }
+        // "3.1" / "a." style lists become nested Markdown lists, shown in the chosen numbering style.
+        let text = Markdown.normalizingPastedLists(pasted)
+        guard text != pasted || NoteCodec.containsFence(text) else {
             return super.readSelection(from: pboard, type: type)
         }
         let decoded = NoteCodec.decode(text, attributes: typingAttributes, host: codeBlockHost)

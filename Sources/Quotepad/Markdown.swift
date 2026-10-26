@@ -1,12 +1,12 @@
 import Cocoa
 
 // Live Markdown look for the note editor. Only attributes change, never the text: syntax marks
-// stay in the note but are drawn invisibly (list and fence marks stay visible, dimmed; a "---"
-// line is drawn as a horizontal rule, tables as a grid), so notes remain plain Markdown on disk
-// and when copied.
+// stay in the note but are drawn invisibly (fence marks stay visible, dimmed; a "---" line is
+// drawn as a horizontal rule, tables as a grid, list markers as bullets or numbers in the chosen
+// style), so notes remain plain Markdown on disk and when copied.
 //
 //     # Heading        **bold**   *italic*   ~~strike~~   `code`
-//     - item / 1. item / - [ ] task / - [x] done
+//     - item / 1. item / - [ ] task / - [x] done, nested by indenting (Tab / Shift-Tab)
 //     > quote          ---        ``` fenced lines ```
 //     | a | b |
 //     |---|---|        tables (rows must start with "|")
@@ -17,6 +17,7 @@ enum Markdown {
     private static let rule = regex(#"^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$"#)
     private static let quote = regex(#"^ {0,3}>[ \t]?"#)
     private static let task = regex(#"^([ \t]*)([-*+])[ \t]+(\[([ xX])\])[ \t]+"#)
+    private static let taskBox = regex(#"\[([ xX])\][ \t]+"#)
     private static let list = regex(#"^([ \t]*)([-*+]|(\d{1,9})([.)]))[ \t]+"#)
     private static let fence = regex(#"^ {0,3}```"#)
     private static let tableRow = regex(#"^[ \t]*\|"#)
@@ -49,6 +50,10 @@ enum Markdown {
     static let codeKey = NSAttributedString.Key("QuotepadMarkdownCode")
     /// Marks a table row; the value is a `TableRowGeometry` that `MarkdownLayoutDelegate` draws the grid from.
     static let tableRowKey = NSAttributedString.Key("QuotepadMarkdownTableRow")
+    /// Marks a list line; the value is the marker to draw ("•", "3.1", "a.") as an attributed string with its font.
+    static let listMarkerKey = NSAttributedString.Key("QuotepadMarkdownListMarker")
+    /// On a `listMarkerKey` value: how far the marker sits from the line's start (its level's indent), as an `NSNumber`.
+    static let markerOffsetKey = NSAttributedString.Key("QuotepadMarkdownMarkerOffset")
 
     enum HiddenKind: String {
         /// "## " or "> " at the start of a line: the caret never stops inside or before it.
@@ -71,7 +76,7 @@ enum Markdown {
     // MARK: - Styling
 
     /// Restyles the whole note. `base` is the plain editor look (font + color).
-    static func style(_ storage: NSTextStorage, base: [NSAttributedString.Key: Any]) {
+    static func style(_ storage: NSTextStorage, base: [NSAttributedString.Key: Any], numbering: ListNumbering) {
         guard let baseFont = base[.font] as? NSFont else { return }
         let text = storage.string as NSString
         let whole = NSRange(location: 0, length: text.length)
@@ -80,7 +85,12 @@ enum Markdown {
         storage.addAttributes(base, range: whole)
         storage.addAttribute(.paragraphStyle, value: NSParagraphStyle.default, range: whole)
         storage.removeAttribute(.strikethroughStyle, range: whole)
-        for key in [hiddenKey, ruleKey, codeKey, tableRowKey, .kern] {
+        // Leftovers of IME composition (the Korean IME may re-mark the character before the caret,
+        // e.g. a list marker's hidden space); restyling never runs mid-composition.
+        for key: NSAttributedString.Key in [.underlineStyle, .underlineColor, .backgroundColor] {
+            storage.removeAttribute(key, range: whole)
+        }
+        for key in [hiddenKey, ruleKey, codeKey, tableRowKey, listMarkerKey, .kern] {
             storage.removeAttribute(key, range: whole)
         }
 
@@ -102,6 +112,13 @@ enum Markdown {
             } else if let end = tableEnd(startingAt: index, in: lines, text: text) {
                 styleTable(Array(lines[index..<end]), in: storage, text: text)
                 index = end
+            } else if listLine(lines[index], in: text) != nil {
+                var items: [ListLine] = []
+                while index < lines.count, let item = listLine(lines[index], in: text) {
+                    items.append(item)
+                    index += 1
+                }
+                styleList(items, in: storage, text: text, baseFont: baseFont, numbering: numbering)
             } else {
                 styleLine(line, in: storage, text: text, baseFont: baseFont)
                 index += 1
@@ -124,21 +141,6 @@ enum Markdown {
         } else if let m = match(quote, in: text, line) {
             storage.addAttributes(quoteAttributes(baseFont: baseFont), range: line)
             hide(m.range, .block, in: storage)
-            content = after(m.range, in: line)
-        } else if let m = match(task, in: text, line) {
-            hangIndent(line, marker: m.range, in: storage, text: text, font: baseFont)
-            storage.addAttribute(.foregroundColor, value: NSColor.secondaryLabelColor, range: m.range(at: 2))
-            storage.addAttribute(.foregroundColor, value: markColor, range: m.range(at: 3))
-            content = after(m.range, in: line)
-            if m.range(at: 4).length > 0, text.substring(with: m.range(at: 4)) != " " {
-                storage.addAttributes([
-                    .foregroundColor: NSColor.secondaryLabelColor,
-                    .strikethroughStyle: NSUnderlineStyle.single.rawValue,
-                ], range: content)
-            }
-        } else if let m = match(list, in: text, line) {
-            hangIndent(line, marker: m.range, in: storage, text: text, font: baseFont)
-            storage.addAttribute(.foregroundColor, value: NSColor.secondaryLabelColor, range: m.range(at: 2))
             content = after(m.range, in: line)
         }
 
@@ -279,6 +281,252 @@ enum Markdown {
         return positions
     }
 
+    // MARK: - Lists
+
+    /// One list line: "  1. text", "- text" or "- [x] text".
+    struct ListLine {
+        let line: NSRange
+        /// Indentation, then the bullet or number, then its spaces (the task box isn't included).
+        let prefix: NSRange
+        /// Indentation width in spaces (a tab counts as 4).
+        let indent: Int
+        /// "-", "*", "+" or the number with its "." or ")".
+        let symbol: String
+        let number: Int?
+        let box: NSRange?
+        let checked: Bool
+
+        var ordered: Bool { number != nil }
+        /// Where a nested item's indentation has to reach: past this item's marker.
+        var childIndent: Int { indent + symbol.count + 1 }
+    }
+
+    static func listLine(_ line: NSRange, in text: NSString) -> ListLine? {
+        guard match(rule, in: text, line) == nil, let m = match(list, in: text, line) else { return nil }
+        let indentText = text.substring(with: m.range(at: 1))
+        let indent = indentText.reduce(0) { $0 + ($1 == "\t" ? 4 : 1) }
+        let numberRange = m.range(at: 3)
+        let number = numberRange.location == NSNotFound ? nil : Int(text.substring(with: numberRange))
+        let rest = after(m.range, in: line)
+        let box = number == nil ? match(taskBox, in: text, rest) : nil
+        let checked = box.map { text.substring(with: $0.range(at: 1)) != " " } ?? false
+        return ListLine(line: line, prefix: m.range, indent: indent, symbol: text.substring(with: m.range(at: 2)),
+                        number: number, box: box?.range, checked: checked)
+    }
+
+    /// Nesting comes from indentation; each level's markers are drawn in the chosen numbering style,
+    /// in room kerned into the hidden Markdown marker. (Drawing left of a line's start would be clipped
+    /// on screen: each line is its own clipped layer.)
+    private static func styleList(_ items: [ListLine], in storage: NSTextStorage, text: NSString, baseFont: NSFont,
+                                  numbering: ListNumbering) {
+        // Per level: its typed indentation, whether it's numbered, its count so far, where its markers
+        // start, and where the latest item's text starts (a nested level's markers start there).
+        var levels: [(indent: Int, ordered: Bool, count: Int, start: CGFloat, text: CGFloat)] = []
+        for item in items {
+            while let top = levels.last, item.indent < top.indent { levels.removeLast() }
+            if let top = levels.last, item.indent == top.indent {
+                levels[levels.count - 1].count = top.ordered == item.ordered ? top.count + 1 : 1
+                levels[levels.count - 1].ordered = item.ordered
+            } else {
+                levels.append((item.indent, item.ordered, 1, levels.last?.text ?? 0, 0))
+            }
+            let level = levels.count - 1
+            let marker: String? = item.box != nil ? nil
+                : item.ordered ? numberLabel(levels.map { ($0.ordered, $0.count) }, style: numbering)
+                : ["•", "◦", "▪"][level % 3]
+
+            let markerWidth = marker.map { ceil(($0 + " ").size(withAttributes: [.font: baseFont]).width) } ?? 0
+            let boxWidth = item.box.map { ceil(text.substring(with: $0).size(withAttributes: [.font: baseFont]).width) } ?? 0
+            // The first line's indent goes into kerning, not `firstLineHeadIndent`: apps linked against
+            // the macOS 13 SDK get TextKit's compatibility layout, which applies that indent twice.
+            let start = levels[level].start
+            let style = NSMutableParagraphStyle()
+            style.headIndent = start + markerWidth + boxWidth // wrapped lines
+            levels[level].text = style.headIndent
+            storage.addAttribute(.paragraphStyle, value: style, range: item.line)
+
+            hide(item.prefix, .block, in: storage)
+            // The marker's last space keeps the normal font (still invisible), so an empty item
+            // ("1. ") keeps a normal line height and baseline instead of collapsing to the hidden font's.
+            let lastSpace = NSRange(location: NSMaxRange(item.prefix) - 1, length: 1)
+            var spaceWidth: CGFloat = 0
+            if text.character(at: lastSpace.location) == 0x20 {
+                storage.addAttribute(.font, value: baseFont, range: lastSpace)
+                spaceWidth = (" " as NSString).size(withAttributes: [.font: baseFont]).width
+            }
+            // The marker's room is kerned after the prefix's first character, so the normal-size space comes
+            // after it: the caret of an empty item ("1. ") then sits past the marker, not under it.
+            addKern(start + markerWidth - spaceWidth, at: item.prefix.location, in: storage)
+            if let marker {
+                let drawn = NSAttributedString(string: marker, attributes: [
+                    .font: baseFont, markerOffsetKey: NSNumber(value: Double(start)),
+                ])
+                storage.addAttribute(listMarkerKey, value: drawn, range: item.line)
+            }
+            var content = after(item.prefix, in: item.line)
+            if let box = item.box {
+                storage.addAttribute(.foregroundColor, value: markColor, range: box)
+                content = after(box, in: item.line)
+                if item.checked {
+                    storage.addAttributes([
+                        .foregroundColor: NSColor.secondaryLabelColor,
+                        .strikethroughStyle: NSUnderlineStyle.single.rawValue,
+                    ], range: content)
+                }
+            }
+            styleInline(content, in: storage, text: text)
+        }
+    }
+
+    /// The label for the last level of `path` (each level: is it numbered, and its count so far).
+    static func numberLabel(_ path: [(ordered: Bool, count: Int)], style: ListNumbering) -> String {
+        let count = path.last?.count ?? 1
+        switch style {
+        case .plain:
+            return "\(count)."
+        case .letters:
+            switch (path.count - 1) % 3 {
+            case 1: return letters(count) + "."
+            case 2: return roman(count) + "."
+            default: return "\(count)."
+            }
+        case .outline:
+            // The run of numbered levels ending here, e.g. 3 → 1 gives "3.1"; a bullet level starts a new run.
+            let run = path.reversed().prefix { $0.ordered }.reversed().map { "\($0.count)" }
+            return run.count == 1 ? "\(count)." : run.joined(separator: ".")
+        }
+    }
+
+    private static func letters(_ n: Int) -> String {
+        var n = n, result = ""
+        while n > 0 {
+            n -= 1
+            result = String(UnicodeScalar(UInt8(97 + n % 26))) + result
+            n /= 26
+        }
+        return result
+    }
+
+    private static func roman(_ n: Int) -> String {
+        let table: [(Int, String)] = [(1000, "m"), (900, "cm"), (500, "d"), (400, "cd"), (100, "c"), (90, "xc"),
+                                      (50, "l"), (40, "xl"), (10, "x"), (9, "ix"), (5, "v"), (4, "iv"), (1, "i")]
+        var n = n, result = ""
+        for (value, numeral) in table { while n >= value { result += numeral; n -= value } }
+        return result
+    }
+
+    static func isListLine(at location: Int, in text: NSString) -> Bool {
+        listLine(lineRange(at: location, in: text), in: text) != nil
+    }
+
+    /// A text change for Tab / Shift-Tab on a list line: the new indentation and marker.
+    struct ListEdit {
+        let range: NSRange
+        let replacement: String
+    }
+
+    /// Tab nests the item under the item above it at its level (numbered after that item's other
+    /// children); Shift-Tab moves it out to its parent's level. Nil when the move isn't possible.
+    static func indentEdit(in text: NSString, caret: Int, outdent: Bool) -> ListEdit? {
+        guard let item = listLine(lineRange(at: caret, in: text), in: text) else { return nil }
+        let above = previousListLines(before: item, in: text)
+        let newIndent: Int
+        var number = 1
+        if outdent {
+            guard item.indent > 0, let parent = above.first(where: { $0.indent < item.indent }) else { return nil }
+            newIndent = parent.indent
+            if let parentNumber = parent.number { number = parentNumber + 1 }
+        } else {
+            guard let parent = above.first(where: { $0.indent <= item.indent }), parent.indent == item.indent else { return nil }
+            newIndent = parent.childIndent
+            if let previous = above.first, previous.indent == newIndent, let previousNumber = previous.number {
+                number = previousNumber + 1
+            }
+        }
+        let symbol = item.number == nil ? item.symbol : "\(number)\(item.symbol.last ?? ".")"
+        return ListEdit(range: item.prefix, replacement: String(repeating: " ", count: newIndent) + symbol + " ")
+    }
+
+    /// The list lines right above `item`, nearest first, up to the first line that isn't a list line.
+    private static func previousListLines(before item: ListLine, in text: NSString) -> [ListLine] {
+        var result: [ListLine] = []
+        var start = item.line.location
+        while start > 0, let previous = listLine(lineRange(at: start - 1, in: text), in: text) {
+            result.append(previous)
+            start = previous.line.location
+        }
+        return result
+    }
+
+    private static func lineRange(at location: Int, in text: NSString) -> NSRange {
+        var start = 0, contentsEnd = 0
+        text.getLineStart(&start, end: nil, contentsEnd: &contentsEnd, for: NSRange(location: min(location, text.length), length: 0))
+        return NSRange(location: start, length: contentsEnd - start)
+    }
+
+    // MARK: - Pasted lists
+
+    private static let outlineItem = regex(#"^[ \t]*(\d+(?:\.\d+)+)\.?[ \t]+(.*)$"#)
+    private static let numberItem = regex(#"^(\d+)[.)][ \t]+(.*)$"#)
+    private static let letterItem = regex(#"^[ \t]*([a-z]{1,2}|[ivxlc]+)[.)][ \t]+(.*)$"#)
+
+    /// Lists pasted in "3.1" or "a. / i." form become nested Markdown lists, which are then shown in
+    /// the chosen numbering style. Text without such lists comes back unchanged.
+    static func normalizingPastedLists(_ pasted: String) -> String {
+        enum Kind { case number, letter, roman }
+        var levels: [(kind: Kind, count: Int)] = []
+        var output: [String] = []
+        var converted = false
+
+        for line in pasted.components(separatedBy: "\n") {
+            let ns = line as NSString
+            let whole = NSRange(location: 0, length: ns.length)
+            func group(_ m: NSTextCheckingResult, _ i: Int) -> String { ns.substring(with: m.range(at: i)) }
+
+            var path: [(kind: Kind, count: Int)]?
+            var content = ""
+            if let m = outlineItem.firstMatch(in: line, range: whole) {
+                path = group(m, 1).split(separator: ".").map { (Kind.number, Int($0) ?? 1) }
+                content = group(m, 2)
+                converted = true
+            } else if let m = numberItem.firstMatch(in: line, range: whole) {
+                path = [(.number, Int(group(m, 1)) ?? 1)]
+                content = group(m, 2)
+            } else if !levels.isEmpty, let m = letterItem.firstMatch(in: line, range: whole) {
+                let token = group(m, 1)
+                content = group(m, 2)
+                // A letter that continues a letter level ("h" → "i") wins over reading it as a roman numeral.
+                if let at = levels.lastIndex(where: { $0.kind == .letter }), token == letters(levels[at].count + 1) {
+                    path = Array(levels[..<at]) + [(.letter, levels[at].count + 1)]
+                } else if let at = levels.lastIndex(where: { $0.kind == .roman }), let value = romanValue(token),
+                          value == levels[at].count + 1 {
+                    path = Array(levels[..<at]) + [(.roman, value)]
+                } else if token == "a" {
+                    path = levels + [(.letter, 1)]
+                } else if token == "i" {
+                    path = levels + [(.roman, 1)]
+                }
+                if path != nil { converted = true }
+            }
+
+            guard let path else {
+                levels = []
+                output.append(line)
+                continue
+            }
+            levels = path
+            // Each level is indented past its parent's marker, as Markdown expects.
+            let indent = path.dropLast().reduce(0) { $0 + "\($1.count). ".count }
+            output.append(String(repeating: " ", count: indent) + "\(path[path.count - 1].count). " + content)
+        }
+        return converted ? output.joined(separator: "\n") : pasted
+    }
+
+    private static func romanValue(_ token: String) -> Int? {
+        guard token.allSatisfy({ "ivxlc".contains($0) }) else { return nil }
+        return (1...100).first { roman($0) == token }
+    }
+
     // MARK: - Helpers
 
     private static func addKern(_ amount: CGFloat, at index: Int, in storage: NSTextStorage) {
@@ -326,14 +574,6 @@ enum Markdown {
         let style = NSMutableParagraphStyle()
         style.minimumLineHeight = ceil(NSLayoutManager().defaultLineHeight(for: font))
         return style
-    }
-
-    /// Wrapped lines of a list item line up with the item's text, not its marker.
-    private static func hangIndent(_ line: NSRange, marker: NSRange, in storage: NSTextStorage, text: NSString, font: NSFont) {
-        let prefix = text.substring(with: marker).replacingOccurrences(of: "\t", with: "    ")
-        let style = NSMutableParagraphStyle()
-        style.headIndent = ceil((prefix as NSString).size(withAttributes: [.font: font]).width)
-        storage.addAttribute(.paragraphStyle, value: style, range: line)
     }
 
     private static func addTraits(_ traits: NSFontDescriptor.SymbolicTraits, to range: NSRange, in storage: NSTextStorage) {
@@ -413,6 +653,8 @@ enum Markdown {
         case next(String)
         /// The item is empty: remove its marker to end the list.
         case end(NSRange)
+        /// The item is empty and nested: move it out a level instead of ending the list.
+        case outdent(ListEdit)
     }
 
     /// What Return should do on a list or quote line, given the caret position. Nil for normal lines.
@@ -443,7 +685,10 @@ enum Markdown {
         }
 
         guard caret >= NSMaxRange(marker) else { return nil } // caret inside the marker: plain Return
-        if NSMaxRange(marker) == NSMaxRange(line) { return .end(marker) }
+        if NSMaxRange(marker) == NSMaxRange(line) {
+            if let edit = indentEdit(in: text, caret: caret, outdent: true) { return .outdent(edit) }
+            return .end(marker)
+        }
         return .next(next)
     }
 
@@ -490,7 +735,8 @@ private final class MarkdownLayoutFragment: NSTextLayoutFragment {
     static func needsDrawing(_ string: NSAttributedString) -> Bool {
         guard string.length > 0 else { return false }
         if string.attribute(Markdown.ruleKey, at: 0, effectiveRange: nil) != nil
-            || string.attribute(Markdown.tableRowKey, at: 0, effectiveRange: nil) != nil { return true }
+            || string.attribute(Markdown.tableRowKey, at: 0, effectiveRange: nil) != nil
+            || string.attribute(Markdown.listMarkerKey, at: 0, effectiveRange: nil) != nil { return true }
         var hasCode = false
         string.enumerateAttribute(Markdown.codeKey, in: NSRange(location: 0, length: string.length)) { value, _, stop in
             if value != nil { hasCode = true; stop.pointee = true }
@@ -539,6 +785,28 @@ private final class MarkdownLayoutFragment: NSTextLayoutFragment {
         }
         drawCodeChips(string, at: point, in: context)
         super.draw(at: point, in: context)
+        if let marker = string.attribute(Markdown.listMarkerKey, at: 0, effectiveRange: nil) as? NSAttributedString {
+            drawListMarker(marker, at: point, in: context)
+        }
+    }
+
+    /// The bullet or number of a list line, at the line's start, in the room kerned for it.
+    private func drawListMarker(_ marker: NSAttributedString, at point: CGPoint, in context: CGContext) {
+        guard let line = textLineFragments.first, marker.length > 0 else { return }
+        let font = marker.attribute(.font, at: 0, effectiveRange: nil) as? NSFont ?? .systemFont(ofSize: 14)
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: font,
+            NSAttributedString.Key(kCTForegroundColorFromContextAttributeName as String): true,
+        ]
+        let ctLine = CTLineCreateWithAttributedString(NSAttributedString(string: marker.string, attributes: attributes))
+        let bounds = line.typographicBounds
+        context.saveGState()
+        context.setFillColor(NSColor.secondaryLabelColor.cgColor)
+        context.textMatrix = CGAffineTransform(scaleX: 1, y: -1)
+        let offset = (marker.attribute(Markdown.markerOffsetKey, at: 0, effectiveRange: nil) as? NSNumber)?.doubleValue ?? 0
+        context.textPosition = CGPoint(x: textStartX(at: point) + CGFloat(offset), y: point.y + bounds.minY + line.glyphOrigin.y)
+        CTLineDraw(ctLine, context)
+        context.restoreGState()
     }
 
     /// One row of the grid: header shading, the line under the row (and above the header), and the

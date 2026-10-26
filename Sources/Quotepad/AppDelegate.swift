@@ -256,7 +256,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     /// committing the composition is an edit of its own and restyles.
     func restyleMarkdown() {
         guard let storage = textView.textStorage, !textView.hasMarkedText() else { return }
-        Markdown.style(storage, base: editorAttributes)
+        Markdown.style(storage, base: editorAttributes, numbering: Settings.shared.listNumbering)
+        // While the window is key, TextKit lays the edited line out right away (to place the caret),
+        // before this restyle; re-applying the same attributes later doesn't invalidate that layout, so
+        // a line whose indent or marker room just changed (Tab in a list) would stay drawn the old way.
+        if let layoutManager = textView.textLayoutManager {
+            layoutManager.invalidateLayout(for: layoutManager.documentRange)
+            layoutManager.textViewportLayoutController.layoutViewport()
+        }
         updateTypingAttributes()
     }
 
@@ -302,6 +309,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         case .pipe:
             return true // at the start of a table cell: keep the table intact
         case .block:
+            // At the start of a nested list item, Backspace moves it out a level first.
+            if let edit = Markdown.indentEdit(in: storage.string as NSString, caret: selection.location, outdent: true),
+               NSMaxRange(edit.range) == selection.location {
+                applyListEdit(edit)
+                return true
+            }
             textView.insertText("", replacementRange: run.range)
             return true
         case .inline:
@@ -544,6 +557,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
 
     func textView(_ textView: NSTextView, doCommandBy selector: Selector) -> Bool {
         if selector == #selector(NSResponder.deleteBackward(_:)) { return deleteBackwardOverHiddenMarkdown() }
+        if selector == #selector(NSResponder.insertTab(_:)) { return indentListItem(outdent: false) }
+        if selector == #selector(NSResponder.insertBacktab(_:)) { return indentListItem(outdent: true) }
         guard selector == #selector(NSResponder.insertNewline(_:)) else { return false }
         return runSlashCommand(atLineEnd: false) || continueMarkdownList()
     }
@@ -558,8 +573,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
             textView.insertText("\n" + marker, replacementRange: selection)
         case .end(let marker):
             textView.insertText("", replacementRange: marker)
+        case .outdent(let edit):
+            applyListEdit(edit)
         }
         return true
+    }
+
+    /// Tab / Shift-Tab on a list line nests it or moves it out. Elsewhere Tab types a tab as usual;
+    /// on a list line where the move isn't possible it does nothing rather than break the item.
+    func indentListItem(outdent: Bool) -> Bool {
+        let selection = textView.selectedRange()
+        guard !textView.hasMarkedText() else { return false }
+        let text = textView.string as NSString
+        guard let edit = Markdown.indentEdit(in: text, caret: selection.location, outdent: outdent) else {
+            return Markdown.isListLine(at: selection.location, in: text)
+        }
+        applyListEdit(edit)
+        return true
+    }
+
+    /// Replaces a list item's indentation and marker, keeping the caret where it was in the item's text.
+    func applyListEdit(_ edit: Markdown.ListEdit) {
+        let caret = textView.selectedRange().location
+        let delta = (edit.replacement as NSString).length - edit.range.length
+        textView.insertText(edit.replacement, replacementRange: edit.range)
+        let newCaret = caret >= NSMaxRange(edit.range) ? caret + delta : edit.range.location + (edit.replacement as NSString).length
+        textView.setSelectedRange(NSRange(location: newCaret, length: 0))
     }
 
     /// Space (only right after the trigger, like Notion) or Return on a "/code" or "/p" line makes the box.
