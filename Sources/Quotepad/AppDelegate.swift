@@ -648,6 +648,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         }
         if selector == #selector(NSResponder.insertTab(_:)) { return indentListItem(outdent: false) }
         if selector == #selector(NSResponder.insertBacktab(_:)) { return indentListItem(outdent: true) }
+        if selector == #selector(NSResponder.insertLineBreak(_:)) {
+            // Shift-Return works like Return: a note is plain lines, not paragraphs with soft breaks.
+            if runSlashCommand(atLineEnd: false) || continueMarkdownList() { return true }
+            textView.insertNewline(nil)
+            return true
+        }
         guard selector == #selector(NSResponder.insertNewline(_:)) else { return false }
         return runSlashCommand(atLineEnd: false) || continueMarkdownList()
     }
