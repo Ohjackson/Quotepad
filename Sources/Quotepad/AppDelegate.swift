@@ -777,6 +777,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     }
 
     func codeBlockDidResize(_ attachment: CodeBlockAttachment) {
+        relayOut(attachment)
+    }
+
+    func imageBlockDidResize(_ attachment: ImageAttachment) {
+        relayOut(attachment)
+    }
+
+    func imageBlockDidChange(_ attachment: ImageAttachment) {
+        commitCurrentText()
+        scheduleSave()
+    }
+
+    /// An attachment's size changed: lay its line out again so the line's height follows.
+    func relayOut(_ attachment: NSTextAttachment) {
         guard let range = range(of: attachment),
               let layoutManager = textView.textLayoutManager,
               let contentManager = layoutManager.textContentManager,

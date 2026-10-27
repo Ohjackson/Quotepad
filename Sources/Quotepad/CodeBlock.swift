@@ -494,7 +494,8 @@ enum NoteCodec {
         var cursor = 0
         for match in ImageStore.reference.matches(in: line, range: NSRange(location: 0, length: ns.length)) {
             result.append(NSAttributedString(string: ns.substring(with: NSRange(location: cursor, length: match.range.location - cursor)), attributes: attributes))
-            let attachment = ImageAttachment(fileName: ns.substring(with: match.range(at: 1)))
+            let width = match.range(at: 1).location == NSNotFound ? nil : Double(ns.substring(with: match.range(at: 1)))
+            let attachment = ImageAttachment(fileName: ns.substring(with: match.range(at: 2)), width: width.map { CGFloat($0) })
             attachment.host = host as? ImageBlockHost
             let picture = NSMutableAttributedString(attachment: attachment)
             picture.addAttributes(attributes, range: NSRange(location: 0, length: picture.length))
@@ -512,7 +513,7 @@ enum NoteCodec {
         attributed.enumerateAttribute(.attachment, in: NSRange(location: 0, length: attributed.length)) { value, range, _ in
             if let picture = value as? ImageAttachment {
                 output += source.substring(with: NSRange(location: cursor, length: range.location - cursor))
-                output += ImageStore.markdown(for: picture.fileName)
+                output += ImageStore.markdown(for: picture)
                 cursor = range.location + range.length
                 return
             }
