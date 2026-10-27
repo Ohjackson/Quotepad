@@ -304,10 +304,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
 
     func selectPicture(_ attachment: ImageAttachment?) {
         guard attachment !== selectedPicture else { return }
+        let caret = caretColor // read before the first change below hides the caret, or `.clear` gets stored
         selectedPicture?.isSelected = false
         selectedPicture = attachment
         attachment?.isSelected = true
-        textView.insertionPointColor = attachment == nil ? caretColor : .clear
+        textView.insertionPointColor = attachment == nil ? caret : .clear
     }
 
     /// The text view's own caret color, put back once no picture is selected.
