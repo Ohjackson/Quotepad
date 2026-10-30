@@ -70,6 +70,7 @@ To start Quotepad at login, open the gear menu in the panel (or the menu bar ico
 | <kbd>⌘</kbd> <kbd>W</kbd> | Close tab (hides the panel on the last tab) |
 | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>[</kbd> / <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>]</kbd> | Previous / next tab |
 | <kbd>⌃</kbd> <kbd>Tab</kbd> / <kbd>⌃</kbd> <kbd>⇧</kbd> <kbd>Tab</kbd> | Next / previous tab |
+| <kbd>⌥</kbd> <kbd>⌘</kbd> <kbd>←</kbd> / <kbd>⌥</kbd> <kbd>⌘</kbd> <kbd>→</kbd> | Previous / next tab |
 | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>C</kbd> | Copy with the pictures themselves (for apps like Notion) |
 | <kbd>⌘</kbd> <kbd>,</kbd> | Settings |
 | <kbd>Esc</kbd> | Hide the panel |
