@@ -261,8 +261,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         // While the window is key, TextKit lays the edited line out right away (to place the caret),
         // before this restyle; re-applying the same attributes later doesn't invalidate that layout, so
         // a line whose indent or marker room just changed (Tab in a list) would stay drawn the old way.
-        if let layoutManager = textView.textLayoutManager {
-            layoutManager.invalidateLayout(for: layoutManager.documentRange)
+        // Only the caret's line: relaying the whole note re-estimates tall lines (pictures) and makes
+        // the view jump while typing.
+        let text = storage.string as NSString
+        let caret = min(textView.selectedRange().location, text.length)
+        let line = text.lineRange(for: NSRange(location: caret, length: 0))
+        if let layoutManager = textView.textLayoutManager, let contentManager = layoutManager.textContentManager,
+           let start = contentManager.location(contentManager.documentRange.location, offsetBy: line.location),
+           let end = contentManager.location(start, offsetBy: line.length),
+           let range = NSTextRange(location: start, end: end) {
+            layoutManager.invalidateLayout(for: range)
+            // Real heights for the whole note, not TextKit's estimates for lines off screen: an estimate
+            // that's off (tall pictures) gets corrected on the next edit, and the view jumps by the difference.
+            layoutManager.ensureLayout(for: layoutManager.documentRange)
             layoutManager.textViewportLayoutController.layoutViewport()
         }
         updateTypingAttributes()
