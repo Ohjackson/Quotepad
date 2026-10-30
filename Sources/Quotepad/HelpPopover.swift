@@ -26,6 +26,7 @@ final class HelpViewController: NSViewController {
             ("⌘'", "열기 / 닫기"),
             ("⌘T  ⌘W", "새 탭 · 탭 닫기"),
             ("⌃Tab  ⌘⇧]", "다음 탭"),
+            ("⌘C  ⌘⇧C", "복사 (사진은 경로) · 사진째 복사 (Notion)"),
             ("⌘,", "설정"),
             ("Esc", "숨기기"),
         ]),

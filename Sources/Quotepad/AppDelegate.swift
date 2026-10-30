@@ -880,6 +880,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
             }
             if key == kVK_ANSI_RightBracket { selectRelativeTab(1); return true }
             if key == kVK_ANSI_LeftBracket { selectRelativeTab(-1); return true }
+            if key == kVK_ANSI_C, let note = focusedText as? NoteTextView { note.copyWithPictures(); return true }
         case .control:
             if key == kVK_Tab { selectRelativeTab(1); return true }
         case [.control, .shift]:

@@ -28,7 +28,7 @@ Some notes don't deserve a Notes.app document: an email address you're about to 
 - **Global hotkey.** <kbd>⌘</kbd> <kbd>'</kbd> toggles the panel from any app, on any Space, even over full-screen apps.
 - **Tabs.** Keep several notes side by side. Tab titles come from each note's first line.
 - **Markdown as you type.** Headings, bold, italic, strikethrough, inline code, lists, quotes, rules and tables render in place. <kbd>Tab</kbd> and <kbd>⇧</kbd> <kbd>Tab</kbd> nest list items, and nested numbers can read 3.1, a. or 1. (Settings). The marks are hidden but stay in the text, so a note pasted from a chatbot or copied out of Quotepad is still plain Markdown.
-- **Pictures.** Paste a screenshot or an image, or drag one in. Click a picture and drag its side handles to resize it; it keeps its proportions. Pictures are saved next to your notes in `images/` and the note keeps a Markdown `![](images/…)` line (`![|320](images/…)` once resized).
+- **Pictures.** Paste a screenshot or an image, or drag one in. Click a picture and drag its side handles to resize it; it keeps its proportions. Pictures are saved next to your notes in `images/` and the note keeps a Markdown `![](images/…)` line (`![|320](images/…)` once resized). <kbd>⌘</kbd> <kbd>C</kbd> copies text with each picture as its file's full path, ready for an AI prompt (a coding assistant can open the files); a lone picture is copied as the image itself. <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>C</kbd> copies the pictures themselves along with the text, so they paste into apps like Notion.
 - **Copyable boxes.** Type `/p` and press <kbd>Space</kbd> for a one-line box for emails, API keys and shell commands, or `/code` for a multi-line code block that keeps indentation. Code blocks get VS Code-style syntax colors for C, Java, Python, Swift, C++, C#, JavaScript, TypeScript, Kotlin, Go, Rust, SQL, Shell, JSON and YAML. The language is detected as you type (or paste), and you can pick one from the block's header instead. Boxes scroll horizontally and have a one-click copy button. Smart quotes and autocorrect are off inside boxes, so what you copy is exactly what you typed.
 - **Survives crashes and power loss.** Notes are saved 1 second after you stop typing (at most 5 seconds during non-stop typing) using `F_FULLFSYNC` and an atomic rename, and are flushed on quit, sleep and shutdown.
 - **Make it yours.** Light/dark theme, seven background tints (sticky-note yellow included), background opacity, font size, and system, monospaced or serif fonts.
@@ -70,6 +70,7 @@ To start Quotepad at login, open the gear menu in the panel (or the menu bar ico
 | <kbd>⌘</kbd> <kbd>W</kbd> | Close tab (hides the panel on the last tab) |
 | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>[</kbd> / <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>]</kbd> | Previous / next tab |
 | <kbd>⌃</kbd> <kbd>Tab</kbd> / <kbd>⌃</kbd> <kbd>⇧</kbd> <kbd>Tab</kbd> | Next / previous tab |
+| <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>C</kbd> | Copy with the pictures themselves (for apps like Notion) |
 | <kbd>⌘</kbd> <kbd>,</kbd> | Settings |
 | <kbd>Esc</kbd> | Hide the panel |
 | `/p` <kbd>Space</kbd> | Insert a one-line copy box (<kbd>Return</kbd> works too) |

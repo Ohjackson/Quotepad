@@ -550,19 +550,103 @@ final class NoteTextView: NSTextView {
         super.insertText(string, replacementRange: replacementRange)
     }
 
+    /// Copies Markdown, made for pasting into an AI prompt: prompts can't take text and pictures in one
+    /// paste, so pictures go in as their files' full paths (a coding assistant can open them). A lone
+    /// picture goes on as the image itself.
     override func writeSelection(to pboard: NSPasteboard, types: [NSPasteboard.PasteboardType]) -> Bool {
-        guard let storage = textStorage, selectedRange().length > 0 else {
+        guard textStorage != nil, selectedRange().length > 0 else {
             return super.writeSelection(to: pboard, types: types)
         }
-        pboard.clearContents()
-        return pboard.setString(NoteCodec.encode(storage.attributedSubstring(from: selectedRange())), forType: .string)
+        return write(selectedRange(), to: pboard)
     }
+
+    /// A selected picture shows as a ring with the caret parked after it, not as a text selection;
+    /// ⌘C / ⌘X then take that picture.
+    private var selectedPictureRange: NSRange? {
+        let caret = selectedRange()
+        guard caret.length == 0, caret.location > 0, let storage = textStorage, caret.location <= storage.length,
+              storage.attribute(.attachment, at: caret.location - 1, effectiveRange: nil) is ImageAttachment else { return nil }
+        return NSRange(location: caret.location - 1, length: 1)
+    }
+
+    override func copy(_ sender: Any?) {
+        guard let picture = selectedPictureRange else { return super.copy(sender) }
+        _ = write(picture, to: .general)
+    }
+
+    /// ⌘⇧C: a copy that carries the pictures themselves, as HTML, for apps like Notion (which can't
+    /// open the note's `images/` paths).
+    func copyWithPictures() {
+        let range = selectedPictureRange ?? selectedRange()
+        guard range.length > 0 else { return }
+        _ = write(range, to: .general, withPictures: true)
+    }
+
+    override func cut(_ sender: Any?) {
+        guard let picture = selectedPictureRange else { return super.cut(sender) }
+        _ = write(picture, to: .general)
+        doCommand(by: #selector(NSResponder.deleteBackward(_:))) // removes the picture with its line
+    }
+
+    private func write(_ range: NSRange, to pboard: NSPasteboard, withPictures: Bool = false) -> Bool {
+        guard let storage = textStorage else { return false }
+        let selection = storage.attributedSubstring(from: range)
+        let markdown = NoteCodec.encode(selection)
+        var pictures: [ImageAttachment] = []
+        selection.enumerateAttribute(.attachment, in: NSRange(location: 0, length: selection.length)) { value, _, _ in
+            if let picture = value as? ImageAttachment { pictures.append(picture) }
+        }
+        pboard.clearContents()
+        guard !pictures.isEmpty else { return pboard.setString(markdown, forType: .string) }
+
+        // Quotepad itself reads the Markdown from its own type, so pictures paste back as the same
+        // files at the same widths.
+        let onlyPicture = pictures.count == 1
+            && selection.string.allSatisfy { $0 == "\u{FFFC}" || $0.isNewline || $0.isWhitespace }
+        // A lone picture goes on as an image only, like a screenshot: with text beside it, chat prompts
+        // paste the text (or nothing) instead of attaching the picture.
+        if onlyPicture, let image = pictures[0].picture, let tiff = image.tiffRepresentation {
+            pboard.declareTypes([Self.markdownType, .png, .tiff], owner: nil)
+            pboard.setString(markdown, forType: Self.markdownType)
+            pboard.setData(tiff, forType: .tiff)
+            if let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
+                pboard.setData(png, forType: .png)
+            }
+            return true
+        }
+        if withPictures {
+            pboard.declareTypes([Self.markdownType, .string, .html], owner: nil)
+            pboard.setString(markdown, forType: .string)
+            pboard.setString(MarkdownHTML.convert(markdown), forType: .html)
+        } else {
+            pboard.declareTypes([Self.markdownType, .string], owner: nil)
+            pboard.setString(Self.withPicturePaths(markdown), forType: .string)
+        }
+        pboard.setString(markdown, forType: Self.markdownType)
+        return true
+    }
+
+    /// `![](images/x.png)` → the picture file's full path.
+    private static func withPicturePaths(_ markdown: String) -> String {
+        let ns = markdown as NSString
+        var text = ""
+        var cursor = 0
+        for match in ImageStore.reference.matches(in: markdown, range: NSRange(location: 0, length: ns.length)) {
+            text += ns.substring(with: NSRange(location: cursor, length: match.range.location - cursor))
+            text += imagesDir.appendingPathComponent(ns.substring(with: match.range(at: 2))).path
+            cursor = NSMaxRange(match.range)
+        }
+        return text + ns.substring(from: cursor)
+    }
+
+    /// The note's Markdown, for pasting back into Quotepad.
+    private static let markdownType = NSPasteboard.PasteboardType("com.quotepad.markdown")
 
     // Pictures: pasted (screenshots, copied images, copied image files) or dragged in.
     private static let imageTypes: [NSPasteboard.PasteboardType] = [.fileURL, .png, .tiff]
 
     override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
-        super.readablePasteboardTypes + Self.imageTypes
+        [Self.markdownType] + super.readablePasteboardTypes + Self.imageTypes
     }
 
     override var acceptableDragTypes: [NSPasteboard.PasteboardType] {
@@ -570,7 +654,19 @@ final class NoteTextView: NSTextView {
     }
 
     override func readSelection(from pboard: NSPasteboard) -> Bool {
-        insertImages(from: pboard) || super.readSelection(from: pboard)
+        insertCopiedMarkdown(from: pboard) || insertImages(from: pboard) || super.readSelection(from: pboard)
+    }
+
+    /// A picture copied in Quotepad: the same file at the same width, not a new copy of the image.
+    private func insertCopiedMarkdown(from pboard: NSPasteboard) -> Bool {
+        guard let markdown = pboard.string(forType: Self.markdownType), let storage = textStorage else { return false }
+        let decoded = NoteCodec.decode(markdown, attributes: typingAttributes, host: codeBlockHost)
+        let range = selectedRange()
+        guard shouldChangeText(in: range, replacementString: decoded.string) else { return true }
+        storage.replaceCharacters(in: range, with: decoded)
+        didChangeText()
+        setSelectedRange(NSRange(location: range.location + decoded.length, length: 0))
+        return true
     }
 
     /// Each picture goes on a line of its own.
@@ -600,6 +696,7 @@ final class NoteTextView: NSTextView {
     }
 
     override func readSelection(from pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
+        if type == Self.markdownType, insertCopiedMarkdown(from: pboard) { return true }
         if Self.imageTypes.contains(type), insertImages(from: pboard) { return true }
         guard let pasted = pboard.string(forType: .string), let storage = textStorage else {
             return super.readSelection(from: pboard, type: type)
