@@ -189,23 +189,27 @@ final class TabItemView: NSView {
     override func viewDidChangeEffectiveAppearance() { needsDisplay = true }
 }
 
-/// Browser-style tab strip: left-aligned tabs with "+" right after the last one. Every tab stays
-/// visible: when space runs out the widest tabs shrink first (titles truncate with "…"), and tabs
-/// that still don't fit at their minimum width move into a "···" menu. The selected tab is always shown.
+/// Safari-style tab strip: left-aligned tabs with "+" right after the last one. When space runs out
+/// the widest tabs shrink first (titles truncate with "…"), down to a still readable width; past that
+/// the strip scrolls sideways, with the clipped edges fading out. The selected tab is scrolled into view.
 final class TabBarView: NSView {
     static let tabHeight: CGFloat = 26
     static let spacing: CGFloat = 4
     static let addSize: CGFloat = 24
+    /// Tabs don't shrink below this (or their own width) to fit: the strip scrolls instead.
+    static let scrollingWidth: CGFloat = 120
+    static let fadeWidth: CGFloat = 18
 
     var onSelect: ((Int) -> Void)?
     var onClose: ((Int) -> Void)?
     var onAdd: (() -> Void)?
 
     private let addButton = IconButton(symbolName: "plus", pointSize: 11, weight: .semibold, cornerRadius: 6, label: "새 탭")
-    private let overflowButton = IconButton(symbolName: "ellipsis", pointSize: 11, weight: .semibold, cornerRadius: 6, label: "다른 탭")
+    private let scrollView = TabScrollView()
+    private let strip = NSView()
+    private let fadeMask = CAGradientLayer()
     private var items: [TabItemView] = []
     private var selectedIndex = 0
-    private var hiddenIndices: [Int] = []
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -213,15 +217,29 @@ final class TabBarView: NSView {
         addButton.onClick = { [weak self] in self?.onAdd?() }
         addSubview(addButton)
 
-        overflowButton.onClick = { [weak self] in self?.showOverflowMenu() }
-        addSubview(overflowButton)
+        scrollView.drawsBackground = false
+        scrollView.borderType = .noBorder
+        scrollView.hasHorizontalScroller = false
+        scrollView.hasVerticalScroller = false
+        scrollView.horizontalScrollElasticity = .allowed
+        scrollView.verticalScrollElasticity = .none
+        scrollView.documentView = strip
+        scrollView.wantsLayer = true
+        fadeMask.startPoint = CGPoint(x: 0, y: 0.5)
+        fadeMask.endPoint = CGPoint(x: 1, y: 0.5)
+        scrollView.layer?.mask = fadeMask
+        scrollView.contentView.postsBoundsChangedNotifications = true
+        NotificationCenter.default.addObserver(self, selector: #selector(stripDidScroll),
+                                               name: NSView.boundsDidChangeNotification, object: scrollView.contentView)
+        addSubview(scrollView)
     }
     required init?(coder: NSCoder) { fatalError() }
 
     func update(titles: [String], selectedIndex: Int) {
+        let changed = selectedIndex != self.selectedIndex || titles.count != items.count
         while items.count < titles.count {
             let item = TabItemView()
-            addSubview(item)
+            strip.addSubview(item)
             items.append(item)
         }
         while items.count > titles.count {
@@ -237,6 +255,7 @@ final class TabBarView: NSView {
         }
         self.selectedIndex = selectedIndex
         relayout()
+        if changed { revealSelected(animated: window?.isVisible == true) }
     }
 
     override func resizeSubviews(withOldSize oldSize: NSSize) {
@@ -246,38 +265,76 @@ final class TabBarView: NSView {
     private func relayout() {
         let y = (bounds.height - Self.tabHeight) / 2
         let budget = max(0, bounds.width - Self.addSize - Self.spacing)
-
-        var visible = Array(items.indices)
-        var widths = Self.fit(items.map(\.preferredWidth), into: budget - Self.spacing * CGFloat(max(0, items.count - 1)))
-        hiddenIndices = []
-        if widths.contains(where: { $0 < TabItemView.minWidth }) {
-            // Overflow: as many minimum-width tabs as fit next to "···", stretched evenly.
-            let room = budget - Self.addSize - Self.spacing
-            let count = max(1, Int((room + Self.spacing) / (TabItemView.minWidth + Self.spacing)))
-            visible = Array(items.indices.prefix(count))
-            if !visible.contains(selectedIndex), items.indices.contains(selectedIndex) {
-                visible[visible.count - 1] = selectedIndex
-            }
-            hiddenIndices = items.indices.filter { !visible.contains($0) }
-            let width = min(TabItemView.maxWidth, (room - Self.spacing * CGFloat(count - 1)) / CGFloat(count))
-            widths = Array(repeating: max(0, floor(width)), count: count)
+        let gaps = Self.spacing * CGFloat(max(0, items.count - 1))
+        let preferred = items.map(\.preferredWidth)
+        let widths = zip(Self.fit(preferred, into: budget - gaps), preferred).map { fitted, own in
+            max(fitted, min(own, Self.scrollingWidth))
         }
+        let contentWidth = widths.reduce(0, +) + gaps
 
         var x: CGFloat = 0
-        for (slot, index) in visible.enumerated() {
-            items[index].isHidden = false
-            items[index].frame = NSRect(x: x, y: y, width: widths[slot], height: Self.tabHeight)
-            x += widths[slot] + Self.spacing
+        for (index, item) in items.enumerated() {
+            item.frame = NSRect(x: x, y: 0, width: widths[index], height: Self.tabHeight)
+            x += widths[index] + Self.spacing
         }
-        for index in hiddenIndices { items[index].isHidden = true }
+        strip.frame = NSRect(x: 0, y: 0, width: contentWidth, height: Self.tabHeight)
+        let visibleWidth = min(contentWidth, budget)
+        scrollView.frame = NSRect(x: 0, y: y, width: visibleWidth, height: Self.tabHeight)
+        // Keeps the scroll position inside the strip after tabs close or the bar widens.
+        let clip = scrollView.contentView
+        let maxX = max(0, contentWidth - visibleWidth)
+        if clip.bounds.origin.x > maxX {
+            clip.scroll(to: NSPoint(x: maxX, y: 0))
+            scrollView.reflectScrolledClipView(clip)
+        }
+        addButton.frame = NSRect(x: visibleWidth + Self.spacing, y: (bounds.height - Self.addSize) / 2,
+                                 width: Self.addSize, height: Self.addSize)
+        updateFades()
+    }
 
-        overflowButton.isHidden = hiddenIndices.isEmpty
-        if !hiddenIndices.isEmpty {
-            overflowButton.frame = NSRect(x: x, y: (bounds.height - Self.addSize) / 2, width: Self.addSize, height: Self.addSize)
-            overflowButton.toolTip = "다른 탭 \(hiddenIndices.count)개"
-            x += Self.addSize + Self.spacing
+    /// Scrolls just far enough to show the selected tab whole, with a little of its neighbor.
+    private func revealSelected(animated: Bool) {
+        guard items.indices.contains(selectedIndex) else { return }
+        let clip = scrollView.contentView
+        let frame = items[selectedIndex].frame
+        let visible = clip.bounds
+        let margin = Self.fadeWidth
+        var x = visible.origin.x
+        if frame.minX - margin < visible.minX {
+            x = frame.minX - margin
+        } else if frame.maxX + margin > visible.maxX {
+            x = frame.maxX + margin - visible.width
         }
-        addButton.frame = NSRect(x: x, y: (bounds.height - Self.addSize) / 2, width: Self.addSize, height: Self.addSize)
+        x = min(max(0, x), max(0, strip.frame.width - visible.width))
+        guard x != visible.origin.x else { return }
+        if animated {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.25
+                context.allowsImplicitAnimation = true
+                clip.animator().setBoundsOrigin(NSPoint(x: x, y: 0))
+            }
+        } else {
+            clip.scroll(to: NSPoint(x: x, y: 0))
+        }
+        scrollView.reflectScrolledClipView(clip)
+    }
+
+    @objc private func stripDidScroll() { updateFades() }
+
+    /// Fades out an edge that has tabs scrolled past it.
+    private func updateFades() {
+        let bounds = scrollView.bounds
+        let offset = scrollView.contentView.bounds.origin.x
+        let fadeLeft = offset > 0.5
+        let fadeRight = offset + bounds.width < strip.frame.width - 0.5
+        let fraction = bounds.width > 0 ? min(0.5, Self.fadeWidth / bounds.width) : 0
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        fadeMask.frame = bounds
+        fadeMask.colors = [fadeLeft ? NSColor.clear.cgColor : NSColor.black.cgColor, NSColor.black.cgColor,
+                           NSColor.black.cgColor, fadeRight ? NSColor.clear.cgColor : NSColor.black.cgColor]
+        fadeMask.locations = [0, NSNumber(value: Double(fraction)), NSNumber(value: Double(1 - fraction)), 1]
+        CATransaction.commit()
     }
 
     /// Shrinks the widest entries first until the total fits `budget`; unchanged when it already fits.
@@ -297,21 +354,6 @@ final class TabBarView: NSView {
         return preferred.map { floor(min($0, cap)) }
     }
 
-    private func showOverflowMenu() {
-        let menu = NSMenu()
-        for index in hiddenIndices {
-            let item = NSMenuItem(title: items[index].title, action: #selector(overflowItemChosen(_:)), keyEquivalent: "")
-            item.target = self
-            item.tag = index
-            menu.addItem(item)
-        }
-        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: -4), in: overflowButton)
-    }
-
-    @objc private func overflowItemChosen(_ sender: NSMenuItem) {
-        onSelect?(sender.tag)
-    }
-
     // Empty bar area: double-click opens a new tab, drag moves the window.
     override var mouseDownCanMoveWindow: Bool { false }
     override func mouseDown(with event: NSEvent) {
@@ -320,5 +362,20 @@ final class TabBarView: NSView {
         } else {
             window?.performDrag(with: event)
         }
+    }
+}
+
+/// The tab strip's scroll view: a mouse wheel (or a vertical swipe) scrolls the tabs sideways too.
+final class TabScrollView: NSScrollView {
+    override func scrollWheel(with event: NSEvent) {
+        guard abs(event.scrollingDeltaY) > abs(event.scrollingDeltaX), let strip = documentView else {
+            return super.scrollWheel(with: event)
+        }
+        let clip = contentView
+        let maxX = max(0, strip.frame.width - clip.bounds.width)
+        guard maxX > 0 else { return }
+        let delta = event.scrollingDeltaY * (event.hasPreciseScrollingDeltas ? 1 : 10)
+        clip.scroll(to: NSPoint(x: min(max(0, clip.bounds.origin.x - delta), maxX), y: 0))
+        reflectScrolledClipView(clip)
     }
 }
