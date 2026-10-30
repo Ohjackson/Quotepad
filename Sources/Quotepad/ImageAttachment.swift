@@ -27,6 +27,8 @@ final class ImageAttachment: NSTextAttachment {
     static let maxHeight: CGFloat = 400
     static let verticalMargin: CGFloat = 6
     static let minimumWidth: CGFloat = 60
+    /// Room kept on each side so the selection ring around a full-width picture isn't cut off.
+    static let ringInset: CGFloat = 4
 
     /// File name inside `imagesDir`.
     let fileName: String
@@ -52,10 +54,11 @@ final class ImageAttachment: NSTextAttachment {
     required init?(coder: NSCoder) { fatalError() }
 
     /// The picture's size in a line `lineWidth` wide, always in its own proportions. Never larger than
-    /// the picture itself or the line; unless resized by hand, also no taller than `maxHeight`.
+    /// the picture itself or the line (less the ring's room); unless resized by hand, also no taller than `maxHeight`.
     func pictureSize(fitting lineWidth: CGFloat) -> CGSize {
         guard let size = picture?.size, size.width > 0, size.height > 0 else { return CGSize(width: 32, height: 32) }
-        var scale = min(1, lineWidth / size.width)
+        let room = max(1, lineWidth - Self.ringInset * 2)
+        var scale = min(1, room / size.width)
         if let width {
             scale = min(scale, max(Self.minimumWidth, width) / size.width)
         } else {
@@ -66,7 +69,8 @@ final class ImageAttachment: NSTextAttachment {
 
     /// The widest it can be resized to in a line `lineWidth` wide: the picture's own width, or the line's.
     func maximumWidth(fitting lineWidth: CGFloat) -> CGFloat {
-        min(picture?.size.width ?? lineWidth, lineWidth)
+        let room = lineWidth - Self.ringInset * 2
+        return min(picture?.size.width ?? room, room)
     }
 
     override func viewProvider(for parentView: NSView?, location: NSTextLocation, textContainer: NSTextContainer?) -> NSTextAttachmentViewProvider? {
