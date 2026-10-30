@@ -331,7 +331,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         for index in range.location..<NSMaxRange(range) {
             if storage.attribute(.attachment, at: index, effectiveRange: nil) is ImageAttachment {
                 pictures += 1
-            } else if text.character(at: index) != 0x0A {
+            } else if ![0x0A, 0x20, 0x09].contains(text.character(at: index)) { // a list picture's indentation is fine too
                 return false
             }
         }
@@ -345,11 +345,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         guard selection.length == 0, selection.location > 0, let storage = textView.textStorage else { return false }
         let text = storage.string as NSString
         if storage.attribute(.attachment, at: selection.location - 1, effectiveRange: nil) is ImageAttachment {
-            var range = NSRange(location: selection.location - 1, length: 1)
+            // The picture's indentation in a list goes with it.
+            var range = NSRange(location: lineStartBeforeIndent(of: selection.location - 1, in: text), length: 0)
+            range.length = selection.location - range.location
             if NSMaxRange(range) < text.length, text.character(at: NSMaxRange(range)) == 0x0A {
                 range.length += 1
             } else if range.location > 0, text.character(at: range.location - 1) == 0x0A {
-                range = NSRange(location: range.location - 1, length: 2)
+                range = NSRange(location: range.location - 1, length: range.length + 1)
             }
             textView.insertText("", replacementRange: range)
             return true
@@ -360,6 +362,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
             return true
         }
         return false
+    }
+
+    /// Where the line holding `location` starts, if only indentation comes before it on that line
+    /// (a picture inside a list item); otherwise `location` itself.
+    func lineStartBeforeIndent(of location: Int, in text: NSString) -> Int {
+        var start = location
+        while start > 0, [0x20, 0x09].contains(text.character(at: start - 1)) { start -= 1 }
+        return start == 0 || text.character(at: start - 1) == 0x0A ? start : location
     }
 
     /// Keeps the caret out of hidden marks, so it never sits somewhere that looks the same but types differently.
@@ -379,7 +389,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
            newRange.location < storage.length,
            storage.attribute(.attachment, at: newRange.location, effectiveRange: nil) is ImageAttachment {
             let leftFromPicture = oldRange.length == 0 && oldRange.location == newRange.location + 1
-            return NSRange(location: leftFromPicture && newRange.location > 0 ? newRange.location - 1 : newRange.location + 1, length: 0)
+            let lineStart = lineStartBeforeIndent(of: newRange.location, in: storage.string as NSString)
+            return NSRange(location: leftFromPicture && lineStart > 0 ? lineStart - 1 : newRange.location + 1, length: 0)
         }
         guard textView === self.textView, newRange.length == 0, let storage = textView.textStorage,
               let run = Markdown.hiddenRun(trapping: newRange.location, in: storage) else { return newRange }
@@ -692,7 +703,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         let selection = textView.selectedRange()
         guard !textView.hasMarkedText() else { return false }
         let text = textView.string as NSString
-        guard let edit = Markdown.indentEdit(in: text, caret: selection.location, outdent: outdent) else {
+        guard let edit = Markdown.indentEdit(in: text, caret: selection.location, outdent: outdent)
+                ?? Markdown.contentIndentEdit(in: text, caret: selection.location, outdent: outdent) else {
             return Markdown.isListLine(at: selection.location, in: text)
         }
         applyListEdit(edit)

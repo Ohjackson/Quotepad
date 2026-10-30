@@ -539,11 +539,14 @@ final class NoteTextView: NSTextView {
     override func insertText(_ string: Any, replacementRange: NSRange) {
         let text = (string as? String) ?? (string as? NSAttributedString)?.string
         if text == " ", !hasMarkedText(), spaceHandler?() == true { return }
-        // A picture keeps its line to itself: text typed right beside it goes on the next line.
-        if !hasMarkedText(), let storage = textStorage, let text, !text.isEmpty, text != "\n" {
+        // A picture keeps its line to itself: text typed right beside it goes on the next line (indented
+        // like the picture, so a picture's caption in a list stays in its item).
+        if !hasMarkedText(), let storage = textStorage, let text, !text.isEmpty, !text.hasPrefix("\n") {
             let caret = replacementRange.location == NSNotFound ? selectedRange().location : replacementRange.location
             if caret > 0, caret <= storage.length, storage.attribute(.attachment, at: caret - 1, effectiveRange: nil) is ImageAttachment {
-                super.insertText("\n", replacementRange: replacementRange)
+                let line = (storage.string as NSString).lineRange(for: NSRange(location: caret - 1, length: 0))
+                let indent = (storage.string as NSString).substring(with: line).prefix { $0 == " " || $0 == "\t" }
+                super.insertText("\n" + indent, replacementRange: replacementRange)
                 return super.insertText(string, replacementRange: selectedRange())
             }
         }
@@ -669,25 +672,32 @@ final class NoteTextView: NSTextView {
         return true
     }
 
-    /// Each picture goes on a line of its own.
+    /// Each picture goes on a line of its own. In a list it goes inside the item, indented, so the
+    /// numbering goes on after it.
     private func insertImages(from pboard: NSPasteboard) -> Bool {
         let names = ImageStore.importImages(from: pboard)
         guard !names.isEmpty, let storage = textStorage else { return false }
-        let range = selectedRange()
+        var range = selectedRange()
         let text = storage.string as NSString
+        let inList = Markdown.listPictures(in: text, replacing: range)
+        if let inList { range = inList.range }
         let pictures = NSMutableAttributedString()
-        if range.location > 0, text.character(at: range.location - 1) != 0x0A {
-            pictures.append(NSAttributedString(string: "\n", attributes: typingAttributes))
+        func append(_ string: String) {
+            if !string.isEmpty { pictures.append(NSAttributedString(string: string, attributes: typingAttributes)) }
+        }
+        if inList?.newlineBefore ?? (range.location > 0 && text.character(at: range.location - 1) != 0x0A) {
+            append("\n")
         }
         for (index, name) in names.enumerated() {
-            if index > 0 { pictures.append(NSAttributedString(string: "\n", attributes: typingAttributes)) }
+            if index > 0 { append("\n") }
+            append(inList?.indent ?? "")
             let attachment = ImageAttachment(fileName: name)
             attachment.host = codeBlockHost as? ImageBlockHost
             let picture = NSMutableAttributedString(attachment: attachment)
             picture.addAttributes(typingAttributes, range: NSRange(location: 0, length: picture.length))
             pictures.append(picture)
         }
-        pictures.append(NSAttributedString(string: "\n", attributes: typingAttributes))
+        append(inList?.after ?? "\n")
         guard shouldChangeText(in: range, replacementString: pictures.string) else { return true }
         storage.replaceCharacters(in: range, with: pictures)
         didChangeText()

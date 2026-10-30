@@ -113,12 +113,20 @@ enum Markdown {
                 styleTable(Array(lines[index..<end]), in: storage, text: text)
                 index = end
             } else if listLine(lines[index], in: text) != nil {
-                var items: [ListLine] = []
-                while index < lines.count, let item = listLine(lines[index], in: text) {
-                    items.append(item)
+                // Indented lines between items (a picture, more text) belong to the item above, so the
+                // numbering goes on after them.
+                var block: [ListBlockLine] = []
+                while index < lines.count {
+                    if let item = listLine(lines[index], in: text) {
+                        block.append(.item(item))
+                    } else if let indent = continuationIndent(lines[index], in: text) {
+                        block.append(.content(lines[index], indent: indent))
+                    } else {
+                        break
+                    }
                     index += 1
                 }
-                styleList(items, in: storage, text: text, baseFont: baseFont, numbering: numbering)
+                styleList(block, in: storage, text: text, baseFont: baseFont, numbering: numbering)
             } else {
                 styleLine(line, in: storage, text: text, baseFont: baseFont)
                 index += 1
@@ -314,21 +322,63 @@ enum Markdown {
                         number: number, box: box?.range, checked: checked)
     }
 
+    /// A line of a list: an item, or an indented line of an item's content (a picture, more text).
+    enum ListBlockLine {
+        case item(ListLine)
+        /// The line and its indentation.
+        case content(NSRange, indent: NSRange)
+    }
+
+    /// The indentation of an indented, non-empty line that isn't a list item: in a list, a line of
+    /// the item above. Nil for other lines.
+    static func continuationIndent(_ line: NSRange, in text: NSString) -> NSRange? {
+        guard listLine(line, in: text) == nil, match(fence, in: text, line) == nil,
+              let m = match(leadingSpace, in: text, line) else { return nil }
+        return m.range
+    }
+
+    private static let leadingSpace = regex(#"^[ \t]+(?=\S)"#)
+
+    private static func width(ofIndent range: NSRange, in text: NSString) -> Int {
+        text.substring(with: range).reduce(0) { $0 + ($1 == "\t" ? 4 : 1) }
+    }
+
     /// Nesting comes from indentation; each level's markers are drawn in the chosen numbering style,
     /// in room kerned into the hidden Markdown marker. (Drawing left of a line's start would be clipped
     /// on screen: each line is its own clipped layer.)
-    private static func styleList(_ items: [ListLine], in storage: NSTextStorage, text: NSString, baseFont: NSFont,
+    private static func styleList(_ block: [ListBlockLine], in storage: NSTextStorage, text: NSString, baseFont: NSFont,
                                   numbering: ListNumbering) {
         // Per level: its typed indentation, whether it's numbered, its count so far, where its markers
         // start, and where the latest item's text starts (a nested level's markers start there).
+        // A level starts at its first item's typed number, as in Markdown ("3." after a break goes on from 3).
         var levels: [(indent: Int, ordered: Bool, count: Int, start: CGFloat, text: CGFloat)] = []
-        for item in items {
+        for entry in block {
+            let item: ListLine
+            switch entry {
+            case .item(let listItem):
+                item = listItem
+            case .content(let line, let indent):
+                // Lined up with the text of the item it belongs to. Pictures and code boxes keep the
+                // whole line's width; only their indentation is hidden.
+                let indentWidth = width(ofIndent: indent, in: text)
+                let x = (levels.last { $0.indent < indentWidth } ?? levels[0]).text
+                hide(indent, .block, in: storage)
+                if text.character(at: NSMaxRange(indent)) != 0xFFFC {
+                    let style = NSMutableParagraphStyle()
+                    style.headIndent = x
+                    storage.addAttribute(.paragraphStyle, value: style, range: line)
+                    addKern(x, at: indent.location, in: storage)
+                }
+                styleInline(after(indent, in: line), in: storage, text: text)
+                continue
+            }
+            let first = max(1, item.number ?? 1)
             while let top = levels.last, item.indent < top.indent { levels.removeLast() }
             if let top = levels.last, item.indent == top.indent {
-                levels[levels.count - 1].count = top.ordered == item.ordered ? top.count + 1 : 1
+                levels[levels.count - 1].count = top.ordered == item.ordered ? top.count + 1 : first
                 levels[levels.count - 1].ordered = item.ordered
             } else {
-                levels.append((item.indent, item.ordered, 1, levels.last?.text ?? 0, 0))
+                levels.append((item.indent, item.ordered, first, levels.last?.text ?? 0, 0))
             }
             let level = levels.count - 1
             let marker: String? = item.box != nil ? nil
@@ -429,7 +479,7 @@ enum Markdown {
     /// children); Shift-Tab moves it out to its parent's level. Nil when the move isn't possible.
     static func indentEdit(in text: NSString, caret: Int, outdent: Bool) -> ListEdit? {
         guard let item = listLine(lineRange(at: caret, in: text), in: text) else { return nil }
-        let above = previousListLines(before: item, in: text)
+        let above = previousListLines(before: item.line.location, in: text)
         let newIndent: Int
         var number = 1
         if outdent {
@@ -447,15 +497,97 @@ enum Markdown {
         return ListEdit(range: item.prefix, replacement: String(repeating: " ", count: newIndent) + symbol + " ")
     }
 
-    /// The list lines right above `item`, nearest first, up to the first line that isn't a list line.
-    private static func previousListLines(before item: ListLine, in text: NSString) -> [ListLine] {
+    /// The list items right above the line starting at `start`, nearest first, up to the first line
+    /// that's neither an item nor an item's indented content.
+    private static func previousListLines(before start: Int, in text: NSString) -> [ListLine] {
         var result: [ListLine] = []
-        var start = item.line.location
-        while start > 0, let previous = listLine(lineRange(at: start - 1, in: text), in: text) {
-            result.append(previous)
-            start = previous.line.location
+        var start = start
+        while start > 0 {
+            let line = lineRange(at: start - 1, in: text)
+            if let previous = listLine(line, in: text) {
+                result.append(previous)
+            } else if continuationIndent(line, in: text) == nil {
+                break
+            }
+            start = line.location
         }
         return result
+    }
+
+    /// The item an indented line at `indentWidth` (or a picture put there) belongs to: the nearest item
+    /// above, in the same list, that's less indented.
+    private static func owner(before start: Int, indentWidth: Int, in text: NSString) -> ListLine? {
+        previousListLines(before: start, in: text).first { $0.indent < indentWidth }
+    }
+
+    /// What starts the item after `item`: its indentation and next number, bullet, or a new task box.
+    private static func nextMarker(after item: ListLine) -> String {
+        let indent = String(repeating: " ", count: item.indent)
+        if let number = item.number { return indent + "\(number + 1)\(item.symbol.last ?? ".") " }
+        return indent + item.symbol + (item.box != nil ? " [ ] " : " ")
+    }
+
+    /// Tab on a line right below a list (text or a picture) moves it in under the last item, as that
+    /// item's content; Shift-Tab moves such a line back out. Nil when the line isn't one of those.
+    static func contentIndentEdit(in text: NSString, caret: Int, outdent: Bool) -> ListEdit? {
+        let line = lineRange(at: caret, in: text)
+        guard listLine(line, in: text) == nil else { return nil }
+        if outdent {
+            guard let indent = continuationIndent(line, in: text) else { return nil }
+            return ListEdit(range: indent, replacement: "")
+        }
+        guard line.length > 0, match(fence, in: text, line) == nil,
+              let last = previousListLines(before: line.location, in: text).first else { return nil }
+        let indent = continuationIndent(line, in: text) ?? NSRange(location: line.location, length: 0)
+        guard width(ofIndent: indent, in: text) < last.childIndent else { return nil }
+        return ListEdit(range: indent, replacement: String(repeating: " ", count: last.childIndent))
+    }
+
+    /// Where pictures pasted at `range` go when it's in a list: on lines of their own, indented under
+    /// the item they belong to, so the numbering goes on after them.
+    struct ListPictures {
+        /// What the pictures replace (an empty item's marker moves below them).
+        let range: NSRange
+        /// The indentation for each picture line.
+        let indent: String
+        /// What follows the pictures: a newline and the next item's marker, or nothing when the list
+        /// goes on below anyway.
+        let after: String
+        /// Whether the pictures need a newline before them.
+        let newlineBefore: Bool
+    }
+
+    static func listPictures(in text: NSString, replacing range: NSRange) -> ListPictures? {
+        let line = lineRange(at: range.location, in: text)
+        guard NSMaxRange(range) <= NSMaxRange(line) else { return nil }
+        let atLineEnd = NSMaxRange(range) == NSMaxRange(line)
+        let lastLine = NSMaxRange(line) >= text.length
+        let below = lastLine ? nil : lineRange(at: NSMaxRange(line) + 1, in: text)
+        let listGoesOn = below.map { listLine($0, in: text) != nil || continuationIndent($0, in: text) != nil } ?? false
+        // After the pictures: at the line's end, the next item (unless the list goes on below anyway);
+        // in the middle of a line, the rest of it, kept in the item.
+        func after(item: ListLine, indent: Int) -> String {
+            if !atLineEnd { return "\n" + String(repeating: " ", count: indent) }
+            return listGoesOn ? "" : "\n" + nextMarker(after: item)
+        }
+
+        if let item = listLine(line, in: text) {
+            // An empty item ("2. "): the pictures go to the item above, and the marker moves below them.
+            if NSMaxRange(item.prefix) == NSMaxRange(line), range.location >= NSMaxRange(item.prefix),
+               let parent = owner(before: line.location, indentWidth: item.indent + 1, in: text) {
+                return ListPictures(range: NSRange(location: line.location, length: line.length),
+                                    indent: String(repeating: " ", count: parent.childIndent),
+                                    after: "\n" + text.substring(with: item.prefix), newlineBefore: false)
+            }
+            guard range.location >= NSMaxRange(item.prefix) else { return nil }
+            return ListPictures(range: range, indent: String(repeating: " ", count: item.childIndent),
+                                after: after(item: item, indent: item.childIndent), newlineBefore: true)
+        }
+        guard let indent = continuationIndent(line, in: text),
+              let item = owner(before: line.location, indentWidth: width(ofIndent: indent, in: text), in: text),
+              range.location >= NSMaxRange(indent) else { return nil }
+        return ListPictures(range: range, indent: text.substring(with: indent),
+                            after: after(item: item, indent: width(ofIndent: indent, in: text)), newlineBefore: true)
     }
 
     private static func lineRange(at location: Int, in text: NSString) -> NSRange {
@@ -680,6 +812,11 @@ enum Markdown {
         } else if let m = match(quote, in: text, line) {
             marker = m.range
             next = text.substring(with: m.range).hasSuffix(">") ? text.substring(with: m.range) + " " : text.substring(with: m.range)
+        } else if let indent = continuationIndent(line, in: text),
+                  let item = owner(before: line.location, indentWidth: width(ofIndent: indent, in: text), in: text) {
+            // After a picture or text inside an item, Return starts the next item.
+            guard caret == NSMaxRange(line) else { return nil }
+            return .next(nextMarker(after: item))
         } else {
             return nil
         }

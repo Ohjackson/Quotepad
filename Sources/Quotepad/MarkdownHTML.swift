@@ -40,18 +40,27 @@ enum MarkdownHTML {
 
             if let item = listItem(line) {
                 while let top = lists.last, item.indent < top.indent { html += "</li></\(lists.removeLast().tag)>" }
+                // A list starts at its first item's number, as in the editor.
+                let open = item.start.map { $0 == 1 ? "<ol>" : "<ol start=\"\($0)\">" } ?? "<ul>"
                 if let top = lists.last, item.indent == top.indent {
                     if top.tag == item.tag {
                         html += "</li>"
                     } else {
-                        html += "</li></\(lists.removeLast().tag)><\(item.tag)>"
+                        html += "</li></\(lists.removeLast().tag)>" + open
                         lists.append((item.indent, item.tag))
                     }
                 } else {
-                    html += "<\(item.tag)>" // nested inside the open <li>, or a new list
+                    html += open // nested inside the open <li>, or a new list
                     lists.append((item.indent, item.tag))
                 }
                 html += "<li>" + inline(item.content)
+                continue
+            }
+            // An indented line in a list (a picture, more text) belongs to the item above it.
+            let indent = line.prefix { $0 == " " || $0 == "\t" }.reduce(0) { $0 + ($1 == "\t" ? 4 : 1) }
+            if !lists.isEmpty, indent > 0, !trimmed.isEmpty {
+                while lists.count > 1, let top = lists.last, indent <= top.indent { html += "</li></\(lists.removeLast().tag)>" }
+                html += "<p>\(inline(trimmed))</p>"
                 continue
             }
             closeLists()
@@ -74,7 +83,8 @@ enum MarkdownHTML {
 
     // MARK: - Blocks
 
-    private static func listItem(_ line: String) -> (indent: Int, tag: String, content: String)? {
+    /// `start`: an ordered item's number; nil for a bullet.
+    private static func listItem(_ line: String) -> (indent: Int, tag: String, start: Int?, content: String)? {
         let ns = line as NSString
         guard let m = listPattern.firstMatch(in: line, range: NSRange(location: 0, length: ns.length)) else { return nil }
         let indent = ns.substring(with: m.range(at: 1)).reduce(0) { $0 + ($1 == "\t" ? 4 : 1) }
@@ -83,7 +93,8 @@ enum MarkdownHTML {
         if !ordered, let box = content.range(of: #"^\[([ xX])\][ \t]+"#, options: .regularExpression) {
             content = (content[box].hasPrefix("[ ]") ? "☐ " : "☑ ") + content[box.upperBound...]
         }
-        return (indent, ordered ? "ol" : "ul", content)
+        let start = ordered ? max(1, Int(ns.substring(with: m.range(at: 3))) ?? 1) : nil
+        return (indent, ordered ? "ol" : "ul", start, content)
     }
 
     private static let listPattern = try! NSRegularExpression(pattern: #"^([ \t]*)([-*+]|(\d{1,9})[.)])[ \t]+"#)
