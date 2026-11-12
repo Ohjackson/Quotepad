@@ -85,6 +85,10 @@ final class TabItemView: NSView {
 
     var onSelect: (() -> Void)?
     var onClose: (() -> Void)?
+    /// Pressing, dragging and releasing the tab: the bar moves it to reorder the tabs.
+    var onDrag: ((NSEvent, DragPhase) -> Void)?
+
+    enum DragPhase { case began, moved, ended }
 
     var title = "" {
         didSet {
@@ -94,6 +98,8 @@ final class TabItemView: NSView {
         }
     }
     var isSelected = false { didSet { refresh() } }
+    /// Being dragged: drawn solid with a shadow, lifted over the tabs it passes.
+    var isLifted = false { didSet { needsDisplay = true } }
     var isClosable = true { didSet { refresh() } }
 
     private let titleLabel = NSTextField(labelWithString: "")
@@ -145,7 +151,16 @@ final class TabItemView: NSView {
     override func updateLayer() {
         layer?.cornerRadius = 7
         let alpha: CGFloat = isSelected ? 0.15 : (hovered ? 0.10 : 0.06)
-        layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(alpha).cgColor
+        if isLifted {
+            let solid = NSColor.windowBackgroundColor.blended(withFraction: 0.3, of: .labelColor) ?? .windowBackgroundColor
+            layer?.backgroundColor = solid.cgColor
+            layer?.shadowOpacity = 0.3
+            layer?.shadowRadius = 4
+            layer?.shadowOffset = CGSize(width: 0, height: -1)
+        } else {
+            layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(alpha).cgColor
+            layer?.shadowOpacity = 0
+        }
     }
 
     override func resizeSubviews(withOldSize oldSize: NSSize) {
@@ -180,7 +195,12 @@ final class TabItemView: NSView {
 
     override func mouseEntered(with event: NSEvent) { hovered = true }
     override func mouseExited(with event: NSEvent) { hovered = false }
-    override func mouseDown(with event: NSEvent) { onSelect?() }
+    override func mouseDown(with event: NSEvent) {
+        onSelect?()
+        onDrag?(event, .began)
+    }
+    override func mouseDragged(with event: NSEvent) { onDrag?(event, .moved) }
+    override func mouseUp(with event: NSEvent) { onDrag?(event, .ended) }
     override func otherMouseUp(with event: NSEvent) {
         if event.buttonNumber == 2, isClosable { onClose?() } // middle click
     }
@@ -192,6 +212,7 @@ final class TabItemView: NSView {
 /// Safari-style tab strip: left-aligned tabs with "+" right after the last one. When space runs out
 /// the widest tabs shrink first (titles truncate with "…"), down to a still readable width; past that
 /// the strip scrolls sideways, with the clipped edges fading out. The selected tab is scrolled into view.
+/// Tabs are reordered by dragging them; the others slide out of the way.
 final class TabBarView: NSView {
     static let tabHeight: CGFloat = 26
     static let spacing: CGFloat = 4
@@ -199,10 +220,16 @@ final class TabBarView: NSView {
     /// Tabs don't shrink below this (or their own width) to fit: the strip scrolls instead.
     static let scrollingWidth: CGFloat = 120
     static let fadeWidth: CGFloat = 18
+    /// How far the mouse has to move before a press on a tab becomes a drag.
+    static let dragThreshold: CGFloat = 4
+    /// Dragging a tab this close to the strip's edge scrolls the strip.
+    static let autoScrollEdge: CGFloat = 28
 
     var onSelect: ((Int) -> Void)?
     var onClose: ((Int) -> Void)?
     var onAdd: (() -> Void)?
+    /// A tab was dragged from one position to another.
+    var onMove: ((Int, Int) -> Void)?
 
     private let addButton = IconButton(symbolName: "plus", pointSize: 11, weight: .semibold, cornerRadius: 6, label: "새 탭")
     private let scrollView = TabScrollView()
@@ -210,6 +237,18 @@ final class TabBarView: NSView {
     private let fadeMask = CAGradientLayer()
     private var items: [TabItemView] = []
     private var selectedIndex = 0
+
+    private struct TabDrag {
+        let item: TabItemView
+        let from: Int
+        let startX: CGFloat
+        /// Where in the tab it was grabbed, so it doesn't jump under the mouse.
+        let grab: CGFloat
+        var point: NSPoint
+        var active = false
+    }
+    private var drag: TabDrag?
+    private var autoScrollTimer: Timer?
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -236,6 +275,7 @@ final class TabBarView: NSView {
     required init?(coder: NSCoder) { fatalError() }
 
     func update(titles: [String], selectedIndex: Int) {
+        guard drag?.active != true else { return } // the order on screen is mid-change; the drop updates it
         let changed = selectedIndex != self.selectedIndex || titles.count != items.count
         while items.count < titles.count {
             let item = TabItemView()
@@ -252,6 +292,9 @@ final class TabBarView: NSView {
             item.isClosable = closable
             item.onSelect = { [weak self] in self?.onSelect?(index) }
             item.onClose = { [weak self] in self?.onClose?(index) }
+            item.onDrag = { [weak self, weak item] event, phase in
+                if let item { self?.handleDrag(of: item, event: event, phase: phase) }
+            }
         }
         self.selectedIndex = selectedIndex
         relayout()
@@ -317,6 +360,108 @@ final class TabBarView: NSView {
             clip.scroll(to: NSPoint(x: x, y: 0))
         }
         scrollView.reflectScrolledClipView(clip)
+    }
+
+    // MARK: - Reordering
+
+    private func handleDrag(of item: TabItemView, event: NSEvent, phase: TabItemView.DragPhase) {
+        switch phase {
+        case .began:
+            guard items.count > 1, let from = items.firstIndex(of: item) else { return }
+            let x = strip.convert(event.locationInWindow, from: nil).x
+            drag = TabDrag(item: item, from: from, startX: event.locationInWindow.x, grab: x - item.frame.minX,
+                           point: event.locationInWindow)
+        case .moved:
+            guard var current = drag, current.item === item else { return }
+            current.point = event.locationInWindow
+            if !current.active {
+                guard abs(current.point.x - current.startX) >= Self.dragThreshold else { return }
+                current.active = true
+                strip.addSubview(item, positioned: .above, relativeTo: nil) // over the tabs it passes
+                item.isLifted = true
+                let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in self?.autoScroll() }
+                RunLoop.main.add(timer, forMode: .common)
+                autoScrollTimer = timer
+            }
+            drag = current
+            follow(to: current.point)
+        case .ended:
+            endDrag()
+        }
+    }
+
+    /// Moves the dragged tab under the mouse, and the other tabs to make room where it would land.
+    private func follow(to windowPoint: NSPoint) {
+        guard let drag else { return }
+        let item = drag.item
+        let x = strip.convert(windowPoint, from: nil).x - drag.grab
+        item.setFrameOrigin(NSPoint(x: min(max(0, x), max(0, strip.frame.width - item.frame.width)), y: 0))
+        // Where the mouse would put it, unclamped: dragging past either end still passes the end tab.
+        let midX = x + item.frame.width / 2
+
+        // It trades places with a neighbor once its middle crosses the neighbor's.
+        guard var index = items.firstIndex(of: item) else { return }
+        let start = index
+        func slotX(_ i: Int) -> CGFloat { items[..<i].reduce(0) { $0 + $1.frame.width + Self.spacing } }
+        while index + 1 < items.count, midX > slotX(index + 1) + items[index + 1].frame.width / 2 {
+            items.swapAt(index, index + 1)
+            index += 1
+        }
+        while index > 0, midX < slotX(index - 1) + items[index - 1].frame.width / 2 {
+            items.swapAt(index, index - 1)
+            index -= 1
+        }
+        guard index != start else { return }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.2
+            context.allowsImplicitAnimation = true
+            var x: CGFloat = 0
+            for tab in items {
+                if tab !== item { tab.animator().setFrameOrigin(NSPoint(x: x, y: 0)) }
+                x += tab.frame.width + Self.spacing
+            }
+        }
+    }
+
+    /// Near either end of the strip, a dragged tab scrolls it, faster the closer it gets.
+    private func autoScroll() {
+        guard let drag, drag.active else { return }
+        let x = scrollView.convert(drag.point, from: nil).x
+        let width = scrollView.bounds.width
+        var delta: CGFloat = 0
+        if x < Self.autoScrollEdge {
+            delta = -min(12, (Self.autoScrollEdge - x) / 3)
+        } else if x > width - Self.autoScrollEdge {
+            delta = min(12, (x - (width - Self.autoScrollEdge)) / 3)
+        }
+        let clip = scrollView.contentView
+        let maxX = max(0, strip.frame.width - clip.bounds.width)
+        let newX = min(max(0, clip.bounds.origin.x + delta), maxX)
+        guard newX != clip.bounds.origin.x else { return }
+        clip.scroll(to: NSPoint(x: newX, y: 0))
+        scrollView.reflectScrolledClipView(clip)
+        follow(to: drag.point)
+    }
+
+    /// Drops the dragged tab: it slides into its slot and the new order is passed on.
+    private func endDrag() {
+        autoScrollTimer?.invalidate()
+        autoScrollTimer = nil
+        guard let finished = drag else { return }
+        drag = nil
+        guard finished.active, let to = items.firstIndex(of: finished.item) else { return }
+        finished.item.isLifted = false
+        let dropped = finished.item.frame
+        // The views are already in the new order, so the update that follows keeps each on its tab.
+        relayout()
+        if to != finished.from { onMove?(finished.from, to) }
+        let slot = finished.item.frame
+        finished.item.frame = dropped
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.2
+            context.allowsImplicitAnimation = true
+            finished.item.animator().frame = slot
+        }
     }
 
     @objc private func stripDidScroll() { updateFades() }

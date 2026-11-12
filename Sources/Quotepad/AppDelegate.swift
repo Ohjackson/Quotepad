@@ -505,6 +505,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
         tabBar.onSelect = { [weak self] in self?.selectTab($0) }
         tabBar.onClose = { [weak self] in self?.closeTab($0) }
         tabBar.onAdd = { [weak self] in self?.addTabAction() }
+        tabBar.onMove = { [weak self] in self?.moveTab(from: $0, to: $1) }
         container.addSubview(tabBar)
 
         gearButton = IconButton(symbolName: "gearshape", pointSize: 12, weight: .medium, cornerRadius: 6, label: "설정")
@@ -960,6 +961,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
             refreshTabBar()
         }
         panel.makeFirstResponder(textView)
+    }
+
+    /// A tab dragged to a new position; the same tab stays selected.
+    func moveTab(from: Int, to: Int) {
+        guard from != to, tabs.indices.contains(from), tabs.indices.contains(to) else { return }
+        commitCurrentText()
+        let currentID = tabs[selectedIndex].id
+        tabs.insert(tabs.remove(at: from), at: to)
+        selectedIndex = tabs.firstIndex { $0.id == currentID } ?? 0
+        persistState()
+        refreshTabBar()
     }
 
     func selectRelativeTab(_ delta: Int) {
