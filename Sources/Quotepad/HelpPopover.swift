@@ -28,6 +28,7 @@ final class HelpViewController: NSViewController {
             ("⌃Tab  ⌘⇧]", "다음 탭"),
             ("⌥⌘←  ⌥⌘→", "이전 · 다음 탭"),
             ("⌘C  ⌘⇧C", "복사 (사진은 경로) · 사진째 복사 (Notion)"),
+            ("트랙패드 핀치", "글자 크기 (벌리면 크게)"),
             ("⌘,", "설정"),
             ("Esc", "숨기기"),
         ]),

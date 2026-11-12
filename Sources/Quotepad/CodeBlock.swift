@@ -537,6 +537,23 @@ final class NoteTextView: NSTextView {
     /// Called for a typed space; returns true when it completed a trigger like "/code" and was used up.
     var spaceHandler: (() -> Bool)?
 
+    // Pinch on the trackpad: spread to make the text bigger, pinch to make it smaller. It changes the
+    // font size setting in whole points, so the settings slider follows.
+    private var pinchStartSize: Double = 0
+    private var pinchAmount: CGFloat = 0
+
+    override func magnify(with event: NSEvent) {
+        if event.phase == .began || pinchStartSize == 0 {
+            pinchStartSize = Settings.shared.fontSize
+            pinchAmount = 0
+        }
+        pinchAmount += event.magnification
+        let range = Settings.fontSizeRange
+        let size = min(max((pinchStartSize * Double(1 + pinchAmount)).rounded(), range.lowerBound), range.upperBound)
+        if size != Settings.shared.fontSize { Settings.shared.fontSize = size }
+        if event.phase == .ended || event.phase == .cancelled { pinchStartSize = 0 }
+    }
+
     override func insertText(_ string: Any, replacementRange: NSRange) {
         let text = (string as? String) ?? (string as? NSAttributedString)?.string
         if text == " ", !hasMarkedText(), spaceHandler?() == true { return }
