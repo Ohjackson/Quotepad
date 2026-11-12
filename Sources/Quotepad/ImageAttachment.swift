@@ -220,9 +220,7 @@ enum ImageStore {
         let files = (pboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL]) ?? []
         let imageFiles = files.filter { UTType(filenameExtension: $0.pathExtension)?.conforms(to: .image) == true }
         if !imageFiles.isEmpty {
-            return imageFiles.compactMap { url in
-                (try? Data(contentsOf: url)).flatMap { save($0, extension: url.pathExtension.lowercased()) }
-            }
+            return imageFiles.compactMap(importFile)
         }
         if let text = pboard.string(forType: .string), !text.isEmpty, URL(string: text)?.scheme == nil { return [] }
         if let png = pboard.data(forType: .png) { return save(png, extension: "png").map { [$0] } ?? [] }
@@ -231,6 +229,11 @@ enum ImageStore {
             return save(png, extension: "png").map { [$0] } ?? []
         }
         return []
+    }
+
+    /// An image file (e.g. a dropped screenshot) copied into `imagesDir`.
+    static func importFile(_ url: URL) -> String? {
+        (try? Data(contentsOf: url)).flatMap { save($0, extension: url.pathExtension.lowercased()) }
     }
 
     private static func save(_ data: Data, extension ext: String) -> String? {

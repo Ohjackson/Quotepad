@@ -1,4 +1,5 @@
 import Cocoa
+import UniformTypeIdentifiers
 
 // Boxes with a copy button, embedded in the note as TextKit 2 view attachments. On disk they're
 // Markdown fences, so notes stay plain text. Two kinds:
@@ -652,9 +653,57 @@ final class NoteTextView: NSTextView {
         [Self.markdownType] + super.readablePasteboardTypes + Self.imageTypes
     }
 
+    /// What a screenshot's floating thumbnail (and apps like Photos) drag: a file that's only written
+    /// once the drop happens, so there's nothing to wait for on the Desktop.
+    private static let promiseTypes = NSFilePromiseReceiver.readableDraggedTypes.map { NSPasteboard.PasteboardType($0) }
+
     override var acceptableDragTypes: [NSPasteboard.PasteboardType] {
-        super.acceptableDragTypes + Self.imageTypes
+        super.acceptableDragTypes + Self.imageTypes + Self.promiseTypes
     }
+
+    override func dragOperation(for dragInfo: NSDraggingInfo, type: NSPasteboard.PasteboardType) -> NSDragOperation {
+        Self.promiseTypes.contains(type) ? .copy : super.dragOperation(for: dragInfo, type: type)
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        let pboard = sender.draggingPasteboard
+        guard pboard.availableType(from: Self.imageTypes) == nil,
+              let promises = pboard.readObjects(forClasses: [NSFilePromiseReceiver.self]) as? [NSFilePromiseReceiver] else {
+            return super.performDragOperation(sender)
+        }
+        let images = promises.filter { $0.fileTypes.contains { UTType($0)?.conforms(to: .image) == true } }
+        guard !images.isEmpty else { return super.performDragOperation(sender) }
+
+        let drop = characterIndexForInsertion(at: convert(sender.draggingLocation, from: nil))
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("QuotepadDrops/" + UUID().uuidString)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        var names: [String] = []
+        let group = DispatchGroup()
+        for promise in images {
+            group.enter()
+            promise.receivePromisedFiles(atDestination: folder, options: [:], operationQueue: Self.promiseQueue) { url, error in
+                let name = error == nil ? ImageStore.importFile(url) : nil
+                DispatchQueue.main.async {
+                    if let name { names.append(name) }
+                    group.leave()
+                }
+            }
+        }
+        group.notify(queue: .main) { [weak self] in
+            try? FileManager.default.removeItem(at: folder)
+            guard let self, !names.isEmpty, let storage = self.textStorage else { return }
+            self.window?.makeFirstResponder(self)
+            self.setSelectedRange(NSRange(location: min(drop, storage.length), length: 0))
+            _ = self.insertPictures(names)
+        }
+        return true
+    }
+
+    private static let promiseQueue: OperationQueue = {
+        let queue = OperationQueue()
+        queue.qualityOfService = .userInitiated
+        return queue
+    }()
 
     override func readSelection(from pboard: NSPasteboard) -> Bool {
         insertCopiedMarkdown(from: pboard) || insertImages(from: pboard) || super.readSelection(from: pboard)
@@ -675,7 +724,11 @@ final class NoteTextView: NSTextView {
     /// Each picture goes on a line of its own. In a list it goes inside the item, indented, so the
     /// numbering goes on after it.
     private func insertImages(from pboard: NSPasteboard) -> Bool {
-        let names = ImageStore.importImages(from: pboard)
+        insertPictures(ImageStore.importImages(from: pboard))
+    }
+
+    /// Pictures already in `imagesDir`, at the selection.
+    private func insertPictures(_ names: [String]) -> Bool {
         guard !names.isEmpty, let storage = textStorage else { return false }
         var range = selectedRange()
         let text = storage.string as NSString
@@ -707,7 +760,9 @@ final class NoteTextView: NSTextView {
 
     override func readSelection(from pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
         if type == Self.markdownType, insertCopiedMarkdown(from: pboard) { return true }
-        if Self.imageTypes.contains(type), insertImages(from: pboard) { return true }
+        // Pictures before anything else: a drop (e.g. a screenshot's floating thumbnail) also carries
+        // its file's path as text, which the text view would otherwise prefer and type in.
+        if pboard.availableType(from: Self.imageTypes) != nil, insertImages(from: pboard) { return true }
         guard let pasted = pboard.string(forType: .string), let storage = textStorage else {
             return super.readSelection(from: pboard, type: type)
         }
