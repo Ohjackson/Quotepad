@@ -16,9 +16,9 @@ enum MarkdownHTML {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
 
             // Fenced code: ``` one-line boxes and ~~~ code blocks.
-            if trimmed == NoteCodec.fence || NoteCodec.codeFenceLanguage(trimmed) != nil {
+            if trimmed == NoteCodec.fence || trimmed == NoteCodec.commandFence || NoteCodec.codeFenceLanguage(trimmed) != nil {
                 closeLists()
-                let closing = trimmed == NoteCodec.fence ? NoteCodec.fence : NoteCodec.codeFence
+                let closing = trimmed.hasPrefix(NoteCodec.fence) ? NoteCodec.fence : NoteCodec.codeFence
                 var code: [String] = []
                 while let next = lines.popFirst(), next.trimmingCharacters(in: .whitespaces) != closing { code.append(next) }
                 html += "<pre><code>\(escape(code.joined(separator: "\n")))</code></pre>"

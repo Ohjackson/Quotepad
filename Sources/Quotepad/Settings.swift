@@ -122,11 +122,12 @@ final class Settings {
         static let listNumbering = "listNumbering"
         static let codeShortcuts = "codeShortcuts"
         static let snippetShortcuts = "snippetShortcuts"
+        static let commandShortcuts = "commandShortcuts"
         static let spellCheck = "spellCheck"
         static let hideOnFocusLoss = "hideOnFocusLoss"
         static let openPosition = "openPosition"
         static let lastFrame = "lastFrame"
-        static let resettable = [theme, tint, opacity, fontSize, editorFont, listNumbering, codeShortcuts, snippetShortcuts, spellCheck, hideOnFocusLoss, openPosition]
+        static let resettable = [theme, tint, opacity, fontSize, editorFont, listNumbering, codeShortcuts, snippetShortcuts, commandShortcuts, spellCheck, hideOnFocusLoss, openPosition]
     }
 
     static let fontSizeRange: ClosedRange<Double> = 11...24
@@ -142,6 +143,7 @@ final class Settings {
             Key.listNumbering: ListNumbering.outline.rawValue,
             Key.codeShortcuts: "/ㅋㄷ",
             Key.snippetShortcuts: "",
+            Key.commandShortcuts: "",
             Key.spellCheck: false,
             Key.hideOnFocusLoss: true,
             Key.openPosition: OpenPosition.topCenter.rawValue,
@@ -187,6 +189,11 @@ final class Settings {
     var snippetShortcuts: String {
         get { defaults.string(forKey: Key.snippetShortcuts) ?? "" }
         set { defaults.set(newValue, forKey: Key.snippetShortcuts); changed() }
+    }
+
+    var commandShortcuts: String {
+        get { defaults.string(forKey: Key.commandShortcuts) ?? "" }
+        set { defaults.set(newValue, forKey: Key.commandShortcuts); changed() }
     }
 
     /// "/c, 코 /x" → ["/c", "/코", "/x"]: split on commas and spaces, "/" added where missing, lowercased.

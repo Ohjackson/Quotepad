@@ -884,6 +884,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
             if key == kVK_ANSI_T { addTabAction(); return true }
             if key == kVK_ANSI_W { closeCurrentTab(); return true }
             if key == kVK_ANSI_Comma { toggleSettings(); return true }
+            // ⌘↩ in a command box runs it.
+            if key == kVK_Return, let box = focusedText?.delegate as? CodeBlockView, box.runCommand() { return true }
             // A menu-bar-only app has no Edit menu, which is what normally delivers these.
             if let focusedText, handleEditCommand(key: key, in: focusedText) { return true }
         case [.command, .shift]:
@@ -927,7 +929,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTe
     func tabTitle(for tab: NoteTab) -> String {
         for line in tab.text.split(whereSeparator: \.isNewline) {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
-            guard trimmed != NoteCodec.fence && NoteCodec.codeFenceLanguage(trimmed) == nil else { continue }
+            guard trimmed != NoteCodec.fence && trimmed != NoteCodec.commandFence && NoteCodec.codeFenceLanguage(trimmed) == nil else { continue }
             let title = Markdown.plainTitle(trimmed)
             if !title.isEmpty {
                 return String(title.prefix(80))

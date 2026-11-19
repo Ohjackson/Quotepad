@@ -6,6 +6,7 @@ final class HelpViewController: NSViewController {
         ("명령어 (입력 후 Space 또는 Enter)", [
             ("/code", "코드 블록 · 언어 자동 인식"),
             ("/p", "한 줄 복사 박스"),
+            ("/c", "실행 박스 · ▶ 또는 ⌘↩로 터미널에서 실행"),
             ("/help", "이 도움말"),
             ("⌘, → 단축어", "나만의 단축어 추가"),
         ]),

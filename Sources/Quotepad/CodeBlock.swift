@@ -2,17 +2,18 @@ import Cocoa
 import UniformTypeIdentifiers
 
 // Boxes with a copy button, embedded in the note as TextKit 2 view attachments. On disk they're
-// Markdown fences, so notes stay plain text. Two kinds:
+// Markdown fences, so notes stay plain text. Three kinds:
 //
 //  - Snippet (`/p`): one line for emails, keys, commands.
+//  - Command (`/c`): one shell command, with a button that runs it in a new Terminal window.
 //  - Code (`/code`): multi-line code with syntax coloring for the language picked in its header.
 //
 // Typing a trigger and then Space (or Return) turns the line into the box.
 //
-//     ```                                                   ~~~python
-//     someone@example.com                                   def hello():
-//     ```                                                       print("hi")
-//                                                           ~~~
+//     ```                         ```sh                      ~~~python
+//     someone@example.com         npm run dev                def hello():
+//     ```                         ```                            print("hi")
+//                                                            ~~~
 //
 // Both scroll horizontally instead of wrapping.
 
@@ -28,6 +29,8 @@ protocol CodeBlockHost: AnyObject {
 enum CodeBlockKind {
     /// One line, created with `/p`, stored between ``` fences.
     case snippet
+    /// One shell command, created with `/c`, stored between ```sh and ``` fences.
+    case command
     /// Multi-line, created with `/code`, stored between ~~~ fences.
     case code
 }
@@ -42,7 +45,7 @@ final class CodeBlockAttachment: NSTextAttachment {
     var focusWhenLoaded = false
     weak var liveView: CodeBlockView?
 
-    var lineCount: Int { kind == .snippet ? 1 : content.components(separatedBy: "\n").count }
+    var lineCount: Int { kind == .code ? content.components(separatedBy: "\n").count : 1 }
 
     init(content: String, kind: CodeBlockKind, language: String? = nil) {
         self.kind = kind
@@ -91,6 +94,9 @@ final class CodeBlockViewProvider: NSTextAttachmentViewProvider {
 }
 
 private final class BoxBackgroundView: NSView {
+    /// A command box: dark like a terminal, with a green edge.
+    var isTerminal = false { didSet { needsDisplay = true } }
+
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
@@ -101,8 +107,13 @@ private final class BoxBackgroundView: NSView {
     override func updateLayer() {
         layer?.cornerRadius = 8
         layer?.borderWidth = 1
-        layer?.borderColor = NSColor.separatorColor.cgColor
-        layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(0.06).cgColor
+        if isTerminal {
+            layer?.borderColor = NSColor.systemGreen.withAlphaComponent(0.45).cgColor
+            layer?.backgroundColor = NSColor(srgbRed: 0.10, green: 0.11, blue: 0.12, alpha: 0.92).cgColor
+        } else {
+            layer?.borderColor = NSColor.separatorColor.cgColor
+            layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(0.06).cgColor
+        }
     }
     override func viewDidChangeEffectiveAppearance() { needsDisplay = true }
     override var mouseDownCanMoveWindow: Bool { false }
@@ -134,7 +145,7 @@ final class CodeBlockView: NSView, NSTextViewDelegate {
     static func height(for attachment: CodeBlockAttachment) -> CGFloat {
         let text = CGFloat(attachment.lineCount) * lineHeight
         switch attachment.kind {
-        case .snippet: return text + (innerPadding + verticalMargin) * 2
+        case .snippet, .command: return text + (innerPadding + verticalMargin) * 2
         case .code: return text + headerHeight + innerPadding + verticalMargin * 2
         }
     }
@@ -145,16 +156,25 @@ final class CodeBlockView: NSView, NSTextViewDelegate {
     private let editor = NSTextView()
     private let placeholder = NSTextField(labelWithString: "")
     private let copyButton = IconButton(symbolName: "doc.on.doc", pointSize: 11, weight: .medium, cornerRadius: 5, label: "복사")
+    private let runButton = IconButton(symbolName: "play.fill", pointSize: 10, weight: .medium, cornerRadius: 5, label: "터미널에서 실행")
+    /// The dimmed "$" in front of a command.
+    private let prompt = NSTextField(labelWithString: "$")
     private let languageMenu = NSPopUpButton(frame: .zero, pullsDown: false)
     /// The guessed language while the block has none picked (`attachment.language == nil`).
     private var detectedLanguage: CodeLanguage?
     private var detectWork: DispatchWorkItem?
     private var copyResetWork: DispatchWorkItem?
+    private var runResetWork: DispatchWorkItem?
     private var isCode: Bool { attachment.kind == .code }
+    private var isCommand: Bool { attachment.kind == .command }
 
     init(attachment: CodeBlockAttachment) {
         self.attachment = attachment
         super.init(frame: NSRect(x: 0, y: 0, width: 300, height: Self.height(for: attachment)))
+        if isCommand {
+            appearance = NSAppearance(named: .darkAqua) // light text and buttons on the terminal-dark box
+            box.isTerminal = true
+        }
         addSubview(box)
 
         editor.isRichText = false
@@ -190,7 +210,7 @@ final class CodeBlockView: NSView, NSTextViewDelegate {
         scrollView.verticalScrollElasticity = .none
         addSubview(scrollView)
 
-        placeholder.stringValue = isCode ? "코드" : "이메일, 명령어 등 복사할 내용"
+        placeholder.stringValue = isCode ? "코드" : isCommand ? "실행할 명령어 (▶ 또는 ⌘↩로 실행)" : "이메일, 명령어 등 복사할 내용"
         placeholder.font = Self.font
         placeholder.textColor = .placeholderTextColor
         placeholder.isHidden = !attachment.content.isEmpty
@@ -199,6 +219,15 @@ final class CodeBlockView: NSView, NSTextViewDelegate {
         copyButton.toolTip = "복사"
         copyButton.onClick = { [weak self] in self?.copyContent() }
         addSubview(copyButton)
+
+        if isCommand {
+            prompt.font = Self.font
+            prompt.textColor = NSColor.systemGreen.withAlphaComponent(0.8)
+            addSubview(prompt)
+            runButton.toolTip = "터미널에서 실행 (⌘↩)"
+            runButton.onClick = { [weak self] in self?.runCommand() }
+            addSubview(runButton)
+        }
 
         if isCode {
             languageMenu.isBordered = false
@@ -219,14 +248,14 @@ final class CodeBlockView: NSView, NSTextViewDelegate {
         }
 
         setAccessibilityRole(.group)
-        setAccessibilityLabel(isCode ? "코드 블록" : "복사 박스")
+        setAccessibilityLabel(isCode ? "코드 블록" : isCommand ? "실행 박스" : "복사 박스")
     }
     required init?(coder: NSCoder) { fatalError() }
 
     override func resizeSubviews(withOldSize oldSize: NSSize) {
         box.frame = bounds.insetBy(dx: 0, dy: Self.verticalMargin)
         let buttonSize: CGFloat = 22
-        let textX = box.frame.minX + 12
+        var textX = box.frame.minX + 12
         let textHeight = CGFloat(attachment.lineCount) * Self.lineHeight
         let textFrame: NSRect
         if isCode {
@@ -246,12 +275,20 @@ final class CodeBlockView: NSView, NSTextViewDelegate {
                 height: textHeight
             )
         } else {
-            // The copy button sits beside the only line.
+            // The copy button sits beside the only line; a command's run button before it, and its "$" in front.
             copyButton.frame = NSRect(x: box.frame.maxX - 6 - buttonSize, y: box.frame.midY - buttonSize / 2, width: buttonSize, height: buttonSize)
+            var buttonsMinX = copyButton.frame.minX
+            if isCommand {
+                runButton.frame = copyButton.frame.offsetBy(dx: -(buttonSize + 2), dy: 0)
+                buttonsMinX = runButton.frame.minX
+                let promptWidth = ceil(("$ " as NSString).size(withAttributes: [.font: Self.font]).width)
+                prompt.frame = NSRect(x: textX - 2, y: box.frame.midY - Self.lineHeight / 2, width: promptWidth + 4, height: Self.lineHeight)
+                textX += promptWidth
+            }
             textFrame = NSRect(
                 x: textX,
                 y: box.frame.midY - textHeight / 2,
-                width: max(0, copyButton.frame.minX - 8 - textX),
+                width: max(0, buttonsMinX - 8 - textX),
                 height: textHeight
             )
         }
@@ -290,6 +327,21 @@ final class CodeBlockView: NSView, NSTextViewDelegate {
         }
         copyResetWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2, execute: work)
+    }
+
+    /// Runs a command box's command in a new Terminal window. False for other boxes.
+    @discardableResult
+    func runCommand() -> Bool {
+        guard isCommand else { return false }
+        let command = attachment.content.trimmingCharacters(in: .whitespaces)
+        guard !command.isEmpty else { return true }
+        CommandRunner.run(command)
+        runButton.setSymbol("checkmark", label: "실행함")
+        runResetWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.runButton.setSymbol("play.fill", label: "터미널에서 실행") }
+        runResetWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2, execute: work)
+        return true
     }
 
     // MARK: - NSTextViewDelegate
@@ -428,10 +480,12 @@ final class CodeBlockView: NSView, NSTextViewDelegate {
 
 enum NoteCodec {
     static let fence = "```"
+    static let commandFence = "```sh"
     static let codeFence = "~~~"
     // Typed with the Korean layout on, "/p" comes out as "/ㅔ" and "/code" as "/챙ㄷ".
     static let snippetTriggers: Set<String> = ["/p", "/ㅔ"]
     static let codeTriggers: Set<String> = ["/code", "/코드", "/챙ㄷ"]
+    static let commandTriggers: Set<String> = ["/c", "/ㅊ"]
     /// "/ㅗ디ㅔ" = "/help" typed with the Korean layout on.
     static let helpTriggers: Set<String> = ["/help", "/도움말", "/ㅗ디ㅔ"]
 
@@ -439,6 +493,7 @@ enum NoteCodec {
     static func trigger(_ line: String) -> CodeBlockKind? {
         if snippetTriggers.contains(line) || Settings.shortcutSet(Settings.shared.snippetShortcuts).contains(line) { return .snippet }
         if codeTriggers.contains(line) || Settings.shortcutSet(Settings.shared.codeShortcuts).contains(line) { return .code }
+        if commandTriggers.contains(line) || Settings.shortcutSet(Settings.shared.commandShortcuts).contains(line) { return .command }
         return nil
     }
 
@@ -459,15 +514,16 @@ enum NoteCodec {
         return string
     }
 
-    /// Turns ``` fenced one-line blocks into snippets and ~~~ fenced blocks into code blocks.
+    /// Turns ``` fenced one-line blocks into snippets, ```sh ones into command boxes and ~~~ fenced
+    /// blocks into code blocks.
     static func decode(_ text: String, attributes: [NSAttributedString.Key: Any], host: CodeBlockHost?) -> NSAttributedString {
         let lines = text.components(separatedBy: "\n")
         let result = NSMutableAttributedString()
         var index = 0
         while index < lines.count {
             if index > 0 { result.append(NSAttributedString(string: "\n", attributes: attributes)) }
-            if lines[index] == fence, index + 2 < lines.count, lines[index + 2] == fence {
-                let attachment = CodeBlockAttachment(content: lines[index + 1], kind: .snippet)
+            if lines[index] == fence || lines[index] == commandFence, index + 2 < lines.count, lines[index + 2] == fence {
+                let attachment = CodeBlockAttachment(content: lines[index + 1], kind: lines[index] == fence ? .snippet : .command)
                 attachment.host = host
                 result.append(attachmentString(attachment, attributes: attributes))
                 index += 3
@@ -522,6 +578,7 @@ enum NoteCodec {
             output += source.substring(with: NSRange(location: cursor, length: range.location - cursor))
             switch block.kind {
             case .snippet: output += "\(fence)\n\(block.content)\n\(fence)"
+            case .command: output += "\(commandFence)\n\(block.content)\n\(fence)"
             case .code: output += "\(codeFence)\(block.language ?? "")\n\(block.content)\n\(codeFence)"
             }
             cursor = range.location + range.length
@@ -795,5 +852,34 @@ final class NoteTextView: NSTextView {
         didChangeText()
         setSelectedRange(NSRange(location: range.location + decoded.length, length: 0))
         return true
+    }
+}
+
+/// Runs a command box's command: it's written into a temporary `.command` file, which macOS opens in
+/// Terminal (or whatever app the user picked for such files), so no permission to control Terminal is
+/// needed. The shell stays open afterwards, in the home folder, for whatever comes next.
+enum CommandRunner {
+    static func run(_ command: String) {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("Quotepad", isDirectory: true)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let file = folder.appendingPathComponent("run-\(UUID().uuidString.prefix(8)).command")
+        do {
+            try script(for: command).write(to: file, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: file.path)
+        } catch {
+            NSSound.beep()
+            return
+        }
+        NSWorkspace.shared.open(file)
+        // Terminal reads the file as it starts; give it time (a cold launch is slow), then clean up.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30) {
+            try? FileManager.default.removeItem(at: file)
+        }
+    }
+
+    /// The `.command` file: the user's login shell, the home folder, the command, then a shell to keep.
+    static func script(for command: String) -> String {
+        let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+        return "#!\(shell) -l\ncd ~\n\(command)\nexec \"\(shell)\" -l\n"
     }
 }

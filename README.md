@@ -30,6 +30,7 @@ Some notes don't deserve a Notes.app document: an email address you're about to 
 - **Markdown as you type.** Headings, bold, italic, strikethrough, inline code, lists, quotes, rules and tables render in place. <kbd>Tab</kbd> and <kbd>⇧</kbd> <kbd>Tab</kbd> nest list items, and nested numbers can read 3.1, a. or 1. (Settings). The marks are hidden but stay in the text, so a note pasted from a chatbot or copied out of Quotepad is still plain Markdown.
 - **Pictures.** Paste a screenshot or an image, or drag one in. Click a picture and drag its side handles to resize it; it keeps its proportions. A picture pasted in a numbered list goes inside the item, and the numbering carries on after it; <kbd>Tab</kbd> also moves a plain line under the item above. Pictures are saved next to your notes in `images/` and the note keeps a Markdown `![](images/…)` line (`![|320](images/…)` once resized). <kbd>⌘</kbd> <kbd>C</kbd> copies text with each picture as its file's full path, ready for an AI prompt (a coding assistant can open the files); a lone picture is copied as the image itself. <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>C</kbd> copies the pictures themselves along with the text, so they paste into apps like Notion.
 - **Copyable boxes.** Type `/p` and press <kbd>Space</kbd> for a one-line box for emails, API keys and shell commands, or `/code` for a multi-line code block that keeps indentation. Code blocks get VS Code-style syntax colors for C, Java, Python, Swift, C++, C#, JavaScript, TypeScript, Kotlin, Go, Rust, SQL, Shell, JSON and YAML. The language is detected as you type (or paste), and you can pick one from the block's header instead. Boxes scroll horizontally and have a one-click copy button. Smart quotes and autocorrect are off inside boxes, so what you copy is exactly what you typed.
+- **Command boxes.** Type `/c` and press <kbd>Space</kbd> for a dark one-line box that holds a shell command. Click ▶ (or press <kbd>⌘</kbd> <kbd>Return</kbd> in the box) to run it in a new Terminal window, from your home folder; the shell stays open afterwards. Commands only ever run when you click or press the shortcut, never on their own. The note keeps it as a ```` ```sh ```` block.
 - **Survives crashes and power loss.** Notes are saved 1 second after you stop typing (at most 5 seconds during non-stop typing) using `F_FULLFSYNC` and an atomic rename, and are flushed on quit, sleep and shutdown.
 - **Make it yours.** Light/dark theme, seven background tints (sticky-note yellow included), background opacity, font size (or pinch the trackpad to resize the text), and system, monospaced or serif fonts.
 - **Stays out of the way.** Lives in the menu bar, hides when you click elsewhere (optional), remembers its size and, optionally, its position.
@@ -75,6 +76,7 @@ To start Quotepad at login, open the gear menu in the panel (or the menu bar ico
 | <kbd>⌘</kbd> <kbd>,</kbd> | Settings |
 | <kbd>Esc</kbd> | Hide the panel |
 | `/p` <kbd>Space</kbd> | Insert a one-line copy box (<kbd>Return</kbd> works too) |
+| `/c` <kbd>Space</kbd> | Insert a command box; <kbd>⌘</kbd> <kbd>Return</kbd> in it runs the command in Terminal |
 | `/code` <kbd>Space</kbd> | Insert a multi-line code block (<kbd>Return</kbd> works too) |
 | `/help` <kbd>Space</kbd> | Show commands, Markdown syntax and shortcuts |
 
@@ -109,7 +111,7 @@ QUOTEPAD_DATA_DIR=/tmp/quotepad-dev ./.build/release/Quotepad
 | Path | Purpose |
 | --- | --- |
 | `Sources/Quotepad/AppDelegate.swift` | Panel, tabs, shortcuts, saving, global hotkey |
-| `Sources/Quotepad/CodeBlock.swift` | One-line boxes and code blocks (TextKit 2 view attachments) and the note ⇄ Markdown codec |
+| `Sources/Quotepad/CodeBlock.swift` | One-line boxes, command boxes and code blocks (TextKit 2 view attachments) and the note ⇄ Markdown codec |
 | `Sources/Quotepad/Markdown.swift` | Live Markdown styling (hidden marks, tables, code chips, rules) and list continuation |
 | `Sources/Quotepad/SyntaxHighlighter.swift` | Syntax colors and language definitions for code blocks |
 | `Sources/Quotepad/TabBarView.swift` | Tab strip UI |

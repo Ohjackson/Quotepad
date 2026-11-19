@@ -60,6 +60,7 @@ final class SettingsViewController: NSViewController {
     private let numberingPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let codeShortcutsField = NSTextField(string: "")
     private let snippetShortcutsField = NSTextField(string: "")
+    private let commandShortcutsField = NSTextField(string: "")
     private let spellCheckbox = NSButton(checkboxWithTitle: "맞춤법 검사", target: nil, action: nil)
     private let hideCheckbox = NSButton(checkboxWithTitle: "다른 곳을 클릭하면 숨기기", target: nil, action: nil)
     private let positionPopup = NSPopUpButton(frame: .zero, pullsDown: false)
@@ -96,6 +97,7 @@ final class SettingsViewController: NSViewController {
         header("단축어 (쉼표로 여러 개)")
         row("코드 블록", codeShortcutsField)
         row("복사 박스", snippetShortcutsField)
+        row("실행 박스", commandShortcutsField)
         header("동작")
         row("열릴 위치", positionPopup)
         row(hideCheckbox)
@@ -174,7 +176,8 @@ final class SettingsViewController: NSViewController {
         fontPopup.target = self
         fontPopup.action = #selector(fontChanged)
 
-        for (field, placeholder) in [(codeShortcutsField, "/code 외에 추가, 예: /c"), (snippetShortcutsField, "/p 외에 추가, 예: /복사")] {
+        for (field, placeholder) in [(codeShortcutsField, "/code 외에 추가, 예: /cb"), (snippetShortcutsField, "/p 외에 추가, 예: /복사"),
+                                     (commandShortcutsField, "/c 외에 추가, 예: /run")] {
             field.placeholderString = placeholder
             field.controlSize = .small
             field.font = .systemFont(ofSize: 12)
@@ -212,6 +215,7 @@ final class SettingsViewController: NSViewController {
         numberingPopup.selectItem(at: settings.listNumbering.rawValue)
         codeShortcutsField.stringValue = settings.codeShortcuts
         snippetShortcutsField.stringValue = settings.snippetShortcuts
+        commandShortcutsField.stringValue = settings.commandShortcuts
         spellCheckbox.state = settings.spellCheck ? .on : .off
         hideCheckbox.state = settings.hideOnFocusLoss ? .on : .off
         positionPopup.selectItem(at: settings.openPosition.rawValue)
@@ -243,6 +247,7 @@ final class SettingsViewController: NSViewController {
     @objc private func shortcutsChanged() {
         if settings.codeShortcuts != codeShortcutsField.stringValue { settings.codeShortcuts = codeShortcutsField.stringValue }
         if settings.snippetShortcuts != snippetShortcutsField.stringValue { settings.snippetShortcuts = snippetShortcutsField.stringValue }
+        if settings.commandShortcuts != commandShortcutsField.stringValue { settings.commandShortcuts = commandShortcutsField.stringValue }
     }
 
     @objc private func numberingChanged() {
